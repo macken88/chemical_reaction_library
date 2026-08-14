@@ -128,6 +128,38 @@ def _has_ambiguous_bond(component: ComponentDraft, molecule: Chem.Mol) -> bool:
     return any(bond.GetBondType() in (Chem.BondType.UNSPECIFIED, Chem.BondType.ZERO) for bond in molecule.GetBonds())
 
 
+def _is_supported_linear_repeat_unit(components: list[tuple[int, ComponentDraft, Chem.Mol | None]], parsed: dict[int, Chem.Mol | None]) -> bool:
+    """Recognize only the small, explicit linear SRU subset supported in v1."""
+    product_units: list[Chem.Mol] = []
+    for index, component, _ in components:
+        if component.role is not ComponentRole.PRODUCT:
+            continue
+        molecule = parsed[index]
+        assert molecule is not None
+        dummies = [atom for atom in molecule.GetAtoms() if atom.GetAtomicNum() == 0]
+        if dummies:
+            product_units.append(molecule)
+    # One product repeat unit, exactly two attachment atoms, each with one bond.
+    if len(product_units) != 1:
+        return False
+    unit = product_units[0]
+    dummies = [atom for atom in unit.GetAtoms() if atom.GetAtomicNum() == 0]
+    if len(dummies) != 2 or any(atom.GetDegree() != 1 for atom in dummies):
+        return False
+    # A branching atom means this is no longer the simple linear homopolymer
+    # subset. Preserve it as LIMITED rather than overstating coverage.
+    if any(atom.GetAtomicNum() > 0 and atom.GetDegree() > 2 for atom in unit.GetAtoms()):
+        return False
+    # Other reactive components must be finite monomers; dummy attachment
+    # points on both sides represent a larger/ambiguous polymer graph.
+    for index, component, _ in components:
+        molecule = parsed[index]
+        assert molecule is not None
+        if component.role is not ComponentRole.PRODUCT and any(atom.GetAtomicNum() == 0 for atom in molecule.GetAtoms()):
+            return False
+    return True
+
+
 def _reactive_components(draft: ReactionDraft) -> list[tuple[int, ComponentDraft]]:
     return [(index, component) for index, component in enumerate(draft.components) if component.role is not ComponentRole.CONDITION]
 
@@ -146,7 +178,7 @@ def classify(draft: ReactionDraft, parsed: dict[int, Chem.Mol | None] | None = N
     n_by_role = {role: [component for _, component in reactive if component.role is role and component.coefficient == "n"] for role in (ComponentRole.REACTANT, ComponentRole.PRODUCT)}
     has_n = bool(n_by_role[ComponentRole.REACTANT] or n_by_role[ComponentRole.PRODUCT])
     simple_n_placement = all(len(values) <= 1 for values in n_by_role.values()) and has_n
-    if simple_n_placement and (has_dummy or polymer_markers):
+    if simple_n_placement and (has_dummy or polymer_markers) and _is_supported_linear_repeat_unit(molecules, parsed):
         return ValidationMode.REPEAT_UNIT
     if has_n or polymer_markers:
         return ValidationMode.LIMITED

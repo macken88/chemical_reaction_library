@@ -149,3 +149,12 @@ def test_mapping_checks_atom_identity_and_disables_bond_changes_on_error() -> No
     ]))
     assert mismatch.mapping_status is CheckStatus.WARNING
     assert mismatch.bond_change_status is CheckStatus.NOT_EVALUABLE
+
+
+@pytest.mark.parametrize("unit", ["[*]CC", "[*]C([*])[*]", "[*]C(C)(C)[*]"])
+def test_repeat_unit_requires_two_linear_connection_points(unit: str) -> None:
+    result = validate_draft(ReactionDraft(components=[
+        ComponentDraft(role=ComponentRole.REACTANT, structure="C=C", coefficient="n"),
+        ComponentDraft(role=ComponentRole.PRODUCT, structure=unit, coefficient="n"),
+    ], editor_structure_data="repeat unit"))
+    assert result.validation_mode is ValidationMode.LIMITED

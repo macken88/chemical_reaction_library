@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, String, Table, Text, UniqueConstraint, func
+from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, String, Table, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.db import Base
@@ -17,6 +17,7 @@ reaction_tags = Table(
 
 class Reaction(Base):
     __tablename__ = "reactions"
+    __table_args__ = (CheckConstraint("validation_mode IN ('FULL', 'REPEAT_UNIT', 'LOCAL', 'LIMITED')", name="ck_reaction_validation_mode"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str | None] = mapped_column(String(300), nullable=True)
@@ -36,6 +37,10 @@ class Reaction(Base):
 
 class Component(Base):
     __tablename__ = "components"
+    __table_args__ = (
+        CheckConstraint("role IN ('REACTANT', 'PRODUCT', 'CONDITION')", name="ck_component_role"),
+        CheckConstraint("coefficient = 'n' OR CAST(coefficient AS REAL) > 0", name="ck_component_coefficient"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     reaction_id: Mapped[int] = mapped_column(ForeignKey("reactions.id", ondelete="CASCADE"), index=True)
@@ -49,6 +54,14 @@ class Component(Base):
 
 class ValidationResult(Base):
     __tablename__ = "validation_results"
+    __table_args__ = (
+        CheckConstraint("validation_mode IN ('FULL', 'REPEAT_UNIT', 'LOCAL', 'LIMITED')", name="ck_result_validation_mode"),
+        CheckConstraint("representation_status IN ('PASS', 'WARNING', 'FAIL', 'NOT_EVALUABLE', 'INFO')", name="ck_result_representation_status"),
+        CheckConstraint("structure_status IN ('PASS', 'WARNING', 'FAIL', 'NOT_EVALUABLE', 'INFO')", name="ck_result_structure_status"),
+        CheckConstraint("element_balance_status IN ('PASS', 'WARNING', 'FAIL', 'NOT_EVALUABLE', 'INFO')", name="ck_result_element_status"),
+        CheckConstraint("charge_balance_status IN ('PASS', 'WARNING', 'FAIL', 'NOT_EVALUABLE', 'INFO')", name="ck_result_charge_status"),
+        CheckConstraint("mapping_status IN ('PASS', 'WARNING', 'FAIL', 'NOT_EVALUABLE', 'INFO')", name="ck_result_mapping_status"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     reaction_id: Mapped[int] = mapped_column(ForeignKey("reactions.id", ondelete="CASCADE"), unique=True)

@@ -1,11 +1,13 @@
 from pathlib import Path
 import base64
 import sqlite3
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi.testclient import TestClient
 import pytest
 
-from backend.db import SCHEMA_REVISION, SchemaContractError
+from backend.db import Database, SCHEMA_REVISION, SchemaContractError
 from backend.main import create_app
 
 
@@ -156,3 +158,117 @@ def test_restore_engine_health_failure_rolls_back_original_database(tmp_path: Pa
     connection = sqlite3.connect(path)
     assert connection.execute("SELECT name FROM reactions").fetchone()[0] == "original"
     connection.close()
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    [
+        ("UPDATE components SET role = 'BOGUS'", "invalid required domain"),
+        ("UPDATE validation_results SET warnings_json = '{broken'", "invalid JSON"),
+    ],
+)
+def test_restore_rejects_invalid_domain_values_before_replacement(tmp_path: Path, mutation: str, expected: str) -> None:
+    app = create_app(f"sqlite:///{tmp_path / 'library.sqlite3'}")
+    with TestClient(app) as client:
+        assert client.post("/api/reactions", json=payload(name="original")).status_code == 201
+        backup = client.post("/api/backup").json()
+        raw = client.get(f"/api/backup/{backup['backup_token']}").content
+        candidate = tmp_path / "invalid-domain.sqlite3"
+        candidate.write_bytes(raw)
+        connection = sqlite3.connect(candidate)
+        connection.execute("PRAGMA ignore_check_constraints = ON")
+        connection.execute(mutation)
+        connection.commit()
+        connection.close()
+        response = client.post("/api/restore", json={"backup_base64": base64.b64encode(candidate.read_bytes()).decode(), "confirmation_token": "RESTORE_LIBRARY"})
+        assert response.status_code == 422
+        assert expected in response.json()["detail"]
+        assert client.get("/api/reactions").json()["items"][0]["name"] == "original"
+
+
+def test_limited_ai_copy_includes_editor_data_and_reason(tmp_path: Path) -> None:
+    app = create_app(f"sqlite:///{tmp_path / 'library.sqlite3'}")
+    with TestClient(app) as client:
+        created = client.post("/api/reactions", json={
+            "name": "opaque",
+            "editor_structure_data": "Ketcher SRU payload",
+            "components": [
+                {"role": "REACTANT", "structure": "editor-only-polymer"},
+                {"role": "PRODUCT", "structure": "editor-only-polymer"},
+            ],
+        })
+        assert created.status_code == 201
+        copied = client.get(f"/api/reactions/{created.json()['id']}/ai-copy").json()["text"]
+        assert "Reaction SMILES unavailable" in copied
+        assert "Ketcher SRU payload" in copied
+
+
+def test_parallel_gets_finish_and_restore_waits_for_active_session(tmp_path: Path) -> None:
+    path = tmp_path / "library.sqlite3"
+    app = create_app(f"sqlite:///{path}")
+    with TestClient(app) as client:
+        assert client.post("/api/reactions", json=payload()).status_code == 201
+        started = time.monotonic()
+        with ThreadPoolExecutor(max_workers=20) as pool:
+            responses = list(pool.map(lambda _: client.get("/api/reactions").status_code, range(40)))
+        assert responses == [200] * 40
+        assert time.monotonic() - started < 5
+    database = app.state.database
+    candidate, rollback = tmp_path / "candidate.sqlite3", tmp_path / "rollback.sqlite3"
+    database.backup_to(candidate)
+    session_generator = database.session()
+    next(session_generator)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(database.replace_with, candidate, rollback)
+        time.sleep(0.1)
+        assert not future.done()
+        session_generator.close()
+        assert future.result(timeout=5) == SCHEMA_REVISION
+
+
+def test_known_legacy_v1_database_is_snapshotted_and_migrated(tmp_path: Path) -> None:
+    source = tmp_path / "source.sqlite3"
+    current = create_app(f"sqlite:///{source}")
+    current.state.database.dispose()
+    connection = sqlite3.connect(source)
+    connection.execute("DELETE FROM schema_metadata WHERE key = 'schema_revision'")
+    connection.execute("INSERT INTO schema_metadata (key, value) VALUES ('schema_version', '1')")
+    connection.commit()
+    connection.close()
+    migrated = create_app(f"sqlite:///{source}")
+    assert migrated.state.database.health_check() == SCHEMA_REVISION
+    assert (tmp_path / "source.sqlite3.legacy-v1-pre-migration.sqlite3").is_file()
+
+
+def test_default_root_path_migrates_known_legacy_v1_at_startup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert Database().database_url == "sqlite:///reaction_library.sqlite3"
+    root_path = tmp_path / "reaction_library.sqlite3"
+    seeded = create_app(f"sqlite:///{root_path}")
+    seeded.state.database.dispose()
+    connection = sqlite3.connect(root_path)
+    connection.execute("DELETE FROM schema_metadata WHERE key = 'schema_revision'")
+    connection.execute("INSERT INTO schema_metadata (key, value) VALUES ('schema_version', '1')")
+    connection.commit()
+    connection.close()
+    app = create_app(initialize=False)
+    with TestClient(app) as client:
+        assert client.get("/api/schema-version").json()["schema_version"] == SCHEMA_REVISION
+    assert (tmp_path / "reaction_library.sqlite3.legacy-v1-pre-migration.sqlite3").is_file()
+
+
+def test_large_backup_upload_restore_round_trip(tmp_path: Path) -> None:
+    app = create_app(f"sqlite:///{tmp_path / 'library.sqlite3'}")
+    with TestClient(app) as client:
+        assert client.post("/api/reactions", json=payload(notes="x" * (13 * 1024 * 1024))).status_code == 201
+        backup = client.post("/api/backup").json()
+        raw = client.get(f"/api/backup/{backup['backup_token']}").content
+        assert len(raw) > 12 * 1024 * 1024
+        assert client.post("/api/reactions", json=payload(name="later")).status_code == 201
+        restored = client.post(
+            "/api/restore/upload",
+            data={"confirmation_token": "RESTORE_LIBRARY"},
+            files={"backup_file": ("library.sqlite3", raw, "application/vnd.sqlite3")},
+        )
+        assert restored.status_code == 200, restored.text
+        assert client.get("/api/reactions").json()["total"] == 1

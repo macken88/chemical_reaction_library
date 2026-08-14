@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import secrets
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Response, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Response, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
@@ -32,6 +33,8 @@ from backend.schemas import (
     SubstructureSearchRequest,
     ValidationResponse,
 )
+
+RESTORE_UPLOAD_MAX_BYTES = int(os.environ.get("REACTION_LIBRARY_RESTORE_UPLOAD_MAX_BYTES", str(64 * 1024 * 1024)))
 
 
 def _draft_from_model(reaction: Reaction) -> ReactionDraft:
@@ -166,12 +169,18 @@ def _load_reaction(session: Session, reaction_id: int) -> Reaction:
     return reaction
 
 
-def create_app(database_url: str | None = None) -> FastAPI:
+def create_app(database_url: str | None = None, *, initialize: bool = True) -> FastAPI:
     database = Database(database_url)
-    database.create_all()
+    if initialize:
+        database.create_all()
     app = FastAPI(title="Chemical Reaction Library API", version="0.1.0")
     app.state.database = database
     app.state.backups: dict[str, Path] = {}
+
+    if not initialize:
+        @app.on_event("startup")
+        def initialize_default_database() -> None:
+            database.create_all()
 
     def get_session():
         yield from database.session()
@@ -298,7 +307,11 @@ def create_app(database_url: str | None = None) -> FastAPI:
     def ai_copy(reaction_id: int, session: Session = Depends(get_session)) -> AICopyResponse:
         reaction = _load_reaction(session, reaction_id)
         validation = _validation_from_model(reaction.validation_result)
-        representation = reaction.reaction_smiles if validation and validation.representation_status is CheckStatus.PASS else "No verified Reaction SMILES representation; retained editor structure data is available."
+        if reaction.reaction_smiles and validation and validation.representation_status is CheckStatus.PASS:
+            representation = reaction.reaction_smiles
+        else:
+            reason = "; ".join(validation.warnings) if validation and validation.warnings else "Reaction SMILES cannot be generated from this retained representation."
+            representation = f"Reaction SMILES unavailable: {reason}\nEditor structure data:\n{reaction.editor_structure_data or 'Unavailable'}"
         validation_lines = "Not yet run" if validation is None else "\n".join([
             f"- Coverage: {validation.validation_mode.value}",
             f"- Structure: {validation.structure_status.value}",
@@ -316,7 +329,7 @@ def create_app(database_url: str | None = None) -> FastAPI:
             backup_dir.mkdir(parents=True, exist_ok=True)
             token = secrets.token_urlsafe(32)
             path = backup_dir / f"reaction-library-{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{token[:8]}.sqlite3"
-            database.backup_to(path)
+            database._backup_to(path)
             try:
                 validate_sqlite_schema(path)
             except SchemaContractError as exc:
@@ -333,7 +346,7 @@ def create_app(database_url: str | None = None) -> FastAPI:
         return FileResponse(source, media_type="application/vnd.sqlite3", filename=source.name)
 
     @app.post("/api/restore", response_model=RestoreResponse)
-    def restore(request: RestoreRequest, session: Session = Depends(get_session)) -> RestoreResponse:
+    def restore(request: RestoreRequest) -> RestoreResponse:
         uploaded_source = False
         if request.backup_token:
             source = app.state.backups.get(request.backup_token)
@@ -341,15 +354,22 @@ def create_app(database_url: str | None = None) -> FastAPI:
                 raise HTTPException(status_code=404, detail="Unknown or unavailable backup token")
         else:
             uploaded_source = True
-            source = database.file_path.parent / f"restore-upload-{secrets.token_hex(12)}.sqlite3"
+            staging_dir = database.file_path.parent / ".restore-staging"
+            staging_dir.mkdir(parents=True, exist_ok=True)
+            source = staging_dir / f"restore-json-{secrets.token_hex(12)}.sqlite3"
             try:
                 source.write_bytes(base64.b64decode(request.backup_base64 or "", validate=True))
             except (ValueError, OSError) as exc:
                 source.unlink(missing_ok=True)
                 raise HTTPException(status_code=422, detail="backup_base64 is not valid base64 data") from exc
+        return _restore_from_file(source, uploaded_source)
+
+    def _restore_from_file(source: Path, uploaded_source: bool) -> RestoreResponse:
         destination = database.file_path
-        candidate = destination.with_suffix(destination.suffix + f".restore-{secrets.token_hex(8)}.candidate")
-        rollback = destination.with_suffix(destination.suffix + f".restore-{secrets.token_hex(8)}.rollback")
+        staging_dir = destination.parent / ".restore-staging"
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        candidate = staging_dir / f"{destination.name}.restore-{secrets.token_hex(8)}.candidate"
+        rollback = staging_dir / f"{destination.name}.restore-{secrets.token_hex(8)}.rollback"
         # A full copy is made before any engine is disposed or database path is
         # replaced.  The candidate itself is schema-validated in replace_with.
         try:
@@ -359,21 +379,51 @@ def create_app(database_url: str | None = None) -> FastAPI:
             if uploaded_source:
                 source.unlink(missing_ok=True)
             raise HTTPException(status_code=409, detail=f"Could not stage restore candidate: {exc}") from exc
-        session.close()
+        rollback_failed = False
         try:
             schema_version = database.replace_with(candidate, rollback)
         except (OSError, SchemaContractError) as exc:
             candidate.unlink(missing_ok=True)
+            rollback_failed = "rollback failed" in str(exc)
             if uploaded_source:
                 source.unlink(missing_ok=True)
             raise HTTPException(status_code=422, detail=f"Restore rejected or rolled back: {exc}") from exc
         finally:
-            rollback.unlink(missing_ok=True)
+            if not rollback_failed:
+                rollback.unlink(missing_ok=True)
         if uploaded_source:
             source.unlink(missing_ok=True)
         return RestoreResponse(restored=True, schema_version=schema_version)
 
+    @app.post("/api/restore/upload", response_model=RestoreResponse)
+    async def restore_upload(
+        backup_file: UploadFile = File(...),
+        confirmation_token: str = Form(...),
+    ) -> RestoreResponse:
+        if confirmation_token != "RESTORE_LIBRARY":
+            raise HTTPException(status_code=422, detail="confirmation_token must exactly be RESTORE_LIBRARY")
+        staging_dir = database.file_path.parent / ".restore-staging"
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        source = staging_dir / f"restore-upload-{secrets.token_hex(12)}.sqlite3"
+        written = 0
+        try:
+            with source.open("wb") as stream:
+                while chunk := await backup_file.read(1024 * 1024):
+                    written += len(chunk)
+                    if written > RESTORE_UPLOAD_MAX_BYTES:
+                        raise HTTPException(status_code=413, detail=f"Uploaded backup exceeds {RESTORE_UPLOAD_MAX_BYTES} bytes")
+                    stream.write(chunk)
+        except HTTPException:
+            source.unlink(missing_ok=True)
+            raise
+        except OSError as exc:
+            source.unlink(missing_ok=True)
+            raise HTTPException(status_code=409, detail=f"Could not stage uploaded backup: {exc}") from exc
+        finally:
+            await backup_file.close()
+        return _restore_from_file(source, uploaded_source=True)
+
     return app
 
 
-app = create_app()
+app = create_app(initialize=False)
