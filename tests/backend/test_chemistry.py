@@ -166,4 +166,7 @@ def test_sru_sidechain_is_repeat_unit_and_normalizes_single_n() -> None:
         ComponentDraft(role=ComponentRole.PRODUCT, structure="[*]CC(C)[*]"),
     ])
     assert draft_with_sru.components[1].coefficient == "n"
-    assert validate_draft(draft_with_sru).validation_mode is ValidationMode.REPEAT_UNIT
+    result = validate_draft(draft_with_sru)
+    assert result.validation_mode is ValidationMode.REPEAT_UNIT
+    assert result.element_balance_status is CheckStatus.PASS
+    assert result.charge_balance_status is CheckStatus.PASS

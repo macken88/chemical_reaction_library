@@ -97,7 +97,7 @@ def _validate_materialized_rows(connection: sqlite3.Connection) -> None:
             raise SchemaContractError(f"reaction {reaction_id} validation coverage is inconsistent with its draft")
 
 
-def validate_sqlite_schema(path: Path, *, require_current_revision: bool = True) -> str:
+def validate_sqlite_schema(path: Path, *, require_current_revision: bool = True, materialize: bool = True) -> str:
     """Verify that a candidate is a complete, current library database."""
     try:
         connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
@@ -164,7 +164,8 @@ def validate_sqlite_schema(path: Path, *, require_current_revision: bool = True)
                         raise ValueError
                 except (TypeError, ValueError, json.JSONDecodeError):
                     raise SchemaContractError(f"validation result {result_id} has invalid JSON fields")
-            _validate_materialized_rows(connection)
+            if materialize:
+                _validate_materialized_rows(connection)
         finally:
             connection.close()
     except (sqlite3.Error, OSError) as exc:
@@ -185,7 +186,10 @@ def _sqlite_backup(source_path: Path, destination_path: Path) -> None:
 def migrate_known_schema(path: Path) -> bool:
     """Migrate only known v1 metadata or the immediate .2 revision transactionally."""
     try:
-        validate_sqlite_schema(path, require_current_revision=False)
+        # A known historical revision may have a different coverage classifier
+        # or a NULL reaction_smiles. Validate its safe DDL/domain envelope first,
+        # then normalize it below instead of demanding current classification.
+        validate_sqlite_schema(path, require_current_revision=False, materialize=False)
         connection = sqlite3.connect(path)
         try:
             legacy = connection.execute("SELECT value FROM schema_metadata WHERE key = 'schema_version'").fetchone()
@@ -206,6 +210,7 @@ def migrate_known_schema(path: Path) -> bool:
         connection = sqlite3.connect(path)
         try:
             connection.execute("BEGIN IMMEDIATE")
+            _normalize_legacy_reactions(connection)
             if revision is None:
                 connection.execute("INSERT INTO schema_metadata (key, value) VALUES ('schema_revision', ?)", (SCHEMA_REVISION,))
             else:
@@ -221,6 +226,43 @@ def migrate_known_schema(path: Path) -> bool:
             raise SchemaContractError(f"legacy migration failed and rollback failed: {rollback_exc}") from exc
         raise SchemaContractError(f"legacy migration failed; snapshot restored: {exc}") from exc
     return True
+
+
+def _normalize_legacy_reactions(connection: sqlite3.Connection) -> None:
+    """Persist current Draft normalization and revalidation inside migration."""
+    from backend.chemistry import canonical_smiles, validate_draft
+    from backend.schemas import ComponentDraft, ReactionDraft
+
+    rows = connection.execute(
+        "SELECT id, name, reaction_smiles, editor_structure_data, reagents_text, process_text, notes, warning_reason FROM reactions"
+    ).fetchall()
+    for reaction_id, name, reaction_smiles, editor_data, reagents, process, notes, warning_reason in rows:
+        components = connection.execute(
+            "SELECT id, role, structure, coefficient, display_name FROM components WHERE reaction_id = ? ORDER BY id", (reaction_id,)
+        ).fetchall()
+        tags = [row[0] for row in connection.execute("SELECT t.name FROM tags t JOIN reaction_tags rt ON rt.tag_id=t.id WHERE rt.reaction_id=?", (reaction_id,))]
+        # Historical revisions permitted a stale or manually edited reaction
+        # string that disagreed with the persisted components. Components are
+        # the authoritative recoverable structure here; the old string remains
+        # in the pre-migration snapshot and is intentionally not revalidated.
+        # If components themselves violate today's mandatory R/P contract, the
+        # migration rolls back and reports an explicit safe-rejection error.
+        draft = ReactionDraft(
+            name=name, reaction_smiles=None, editor_structure_data=editor_data,
+            components=[ComponentDraft(role=role, structure=structure, coefficient=coefficient, display_name=display_name) for _, role, structure, coefficient, display_name in components],
+            reagents_text=reagents, process_text=process, notes=notes, warning_reason=warning_reason, tags=tags,
+        )
+        validation = validate_draft(draft)
+        connection.execute(
+            "UPDATE reactions SET reaction_smiles=?, validation_mode=? WHERE id=?",
+            (draft.reaction_smiles, validation.validation_mode.value, reaction_id),
+        )
+        for (component_id, _, structure, _, _), normalized in zip(components, draft.components, strict=True):
+            connection.execute("UPDATE components SET coefficient=?, canonical_smiles=? WHERE id=?", (normalized.coefficient, canonical_smiles(structure), component_id))
+        connection.execute(
+            "UPDATE validation_results SET validation_mode=?, representation_status=?, structure_status=?, element_balance_status=?, charge_balance_status=?, mapping_status=?, bond_change_summary=?, element_difference_json=?, warnings_json=?, validator_version=?, validated_at=? WHERE reaction_id=?",
+            (validation.validation_mode.value, validation.representation_status.value, validation.structure_status.value, validation.element_balance_status.value, validation.charge_balance_status.value, validation.mapping_status.value, validation.bond_change_summary, json.dumps(validation.element_difference), json.dumps(validation.warnings), validation.validator_version, validation.validated_at.isoformat(), reaction_id),
+        )
 
 
 class Database:

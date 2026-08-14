@@ -48,6 +48,12 @@ describe("reaction library workflow", () => {
     expect(await screen.findByText(/形式を解釈できませんでした/)).toBeInTheDocument(); expect(source).toHaveValue("not a reaction");
   });
 
+  it("treats an imported but unsaved Draft as dirty before replacing it", async () => {
+    const user = userEvent.setup(); const confirm = vi.fn().mockReturnValue(false); vi.stubGlobal("confirm", confirm); vi.mocked(fetch).mockResolvedValueOnce(await json({ draft: parsed })); render(<App />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /Import/ })); await user.type(screen.getByLabelText("原文"), "CCO>>CC=O"); await user.click(screen.getByRole("button", { name: /Draft に変換する/ }));
+    expect(await screen.findByDisplayValue("テスト反応")).toBeInTheDocument(); await user.click(screen.getByRole("link", { name: /反応台帳/ })); expect(confirm).toHaveBeenCalledTimes(1); expect(screen.getByDisplayValue("テスト反応")).toBeInTheDocument();
+  });
+
   it("normalizes a Ketcher reaction through parse before validation while retaining metadata", async () => {
     const user = userEvent.setup(); vi.mocked(fetch).mockResolvedValueOnce(await json({ draft: parsed })).mockResolvedValueOnce(await json(validation)); render(<App />);
     await user.type(screen.getByPlaceholderText("例: 酢酸エチルの加水分解"), "残す名称"); await user.type(screen.getByPlaceholderText("例: エステル, 加水分解"), "残すタグ");

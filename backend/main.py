@@ -38,6 +38,10 @@ from backend.schemas import (
 RESTORE_UPLOAD_MAX_BYTES = int(os.environ.get("REACTION_LIBRARY_RESTORE_UPLOAD_MAX_BYTES", str(64 * 1024 * 1024)))
 
 
+class StructureSVGResponse(Response):
+    media_type = "image/svg+xml"
+
+
 def _draft_from_model(reaction: Reaction) -> ReactionDraft:
     return ReactionDraft(
         name=reaction.name,
@@ -139,6 +143,17 @@ def _persist_validation(reaction: Reaction, validation: ValidationResponse) -> N
     result.warnings_json = json.dumps(validation.warnings, ensure_ascii=False)
     result.validator_version = validation.validator_version
     result.validated_at = validation.validated_at
+
+
+def _persist_normalized_components(reaction: Reaction, draft: ReactionDraft) -> None:
+    """Keep stored coefficients aligned with pure-chemistry Draft normalization."""
+    if len(reaction.components) != len(draft.components):
+        raise RuntimeError("Stored component set no longer matches its reaction draft")
+    for stored, normalized in zip(reaction.components, draft.components, strict=True):
+        if stored.role != normalized.role.value or stored.structure != normalized.structure:
+            raise RuntimeError("Stored component ordering no longer matches its reaction draft")
+        stored.coefficient = normalized.coefficient
+        stored.canonical_smiles = canonical_smiles(normalized.structure)
 
 
 def _duplicate_ids(session: Session, reaction_smiles: str | None, excluded_id: int | None = None) -> list[int]:
@@ -272,7 +287,9 @@ def create_app(database_url: str | None = None, *, initialize: bool = True) -> F
         statement = select(Reaction).options(selectinload(Reaction.components), selectinload(Reaction.tags), selectinload(Reaction.validation_result))
         reactions = list(session.scalars(statement))
         for reaction in reactions:
-            _persist_validation(reaction, _validate_with_duplicates(session, _draft_from_model(reaction), reaction.id))
+            draft = _draft_from_model(reaction)
+            _persist_normalized_components(reaction, draft)
+            _persist_validation(reaction, _validate_with_duplicates(session, draft, reaction.id))
         session.commit()
         return ReactionListResponse(items=[_response_from_model(item) for item in reactions], total=len(reactions))
 
@@ -300,7 +317,9 @@ def create_app(database_url: str | None = None, *, initialize: bool = True) -> F
     @app.post("/api/reactions/{reaction_id}/revalidate", response_model=ReactionResponse)
     def revalidate_one(reaction_id: int, session: Session = Depends(get_session)) -> ReactionResponse:
         reaction = _load_reaction(session, reaction_id)
-        _persist_validation(reaction, _validate_with_duplicates(session, _draft_from_model(reaction), reaction_id))
+        draft = _draft_from_model(reaction)
+        _persist_normalized_components(reaction, draft)
+        _persist_validation(reaction, _validate_with_duplicates(session, draft, reaction_id))
         session.commit()
         return _response_from_model(_load_reaction(session, reaction_id))
 
@@ -323,7 +342,11 @@ def create_app(database_url: str | None = None, *, initialize: bool = True) -> F
         ])
         return AICopyResponse(text=f"Reaction:\n{representation}\n\nReagents / Catalysts / Conditions:\n{reaction.reagents_text}\n\nProcess:\n{reaction.process_text}\n\nNotes:\n{reaction.notes}\n\nValidation:\n{validation_lines}")
 
-    @app.get("/api/reactions/{reaction_id}/structure.svg", response_class=Response)
+    @app.get(
+        "/api/reactions/{reaction_id}/structure.svg",
+        response_class=StructureSVGResponse,
+        responses={200: {"content": {"image/svg+xml": {}}}},
+    )
     def structure_svg(reaction_id: int, session: Session = Depends(get_session)) -> Response:
         reaction = _load_reaction(session, reaction_id)
         if not reaction.reaction_smiles:

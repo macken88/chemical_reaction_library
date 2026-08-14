@@ -328,6 +328,8 @@ def test_structure_svg_is_safe_and_limited_reactions_return_actionable_422(tmp_p
         assert svg.headers["content-type"].startswith("image/svg+xml")
         assert "<svg" in svg.text.lower()
         assert "<script" not in svg.text.lower()
+        openapi_content = app.openapi()["paths"]["/api/reactions/{reaction_id}/structure.svg"]["get"]["responses"]["200"]["content"]
+        assert "image/svg+xml" in openapi_content
         limited = client.post("/api/reactions", json={
             "editor_structure_data": "retained editor payload",
             "components": [
@@ -338,3 +340,79 @@ def test_structure_svg_is_safe_and_limited_reactions_return_actionable_422(tmp_p
         unavailable = client.get(f"/api/reactions/{limited['id']}/structure.svg")
         assert unavailable.status_code == 422
         assert "verified Reaction SMILES" in unavailable.json()["detail"]
+
+
+def test_legacy_data_is_normalized_before_revision_update(tmp_path: Path) -> None:
+    v1_path = tmp_path / "v1.sqlite3"
+    v1 = create_app(f"sqlite:///{v1_path}")
+    with TestClient(v1) as client:
+        created = client.post("/api/reactions", json=payload()).json()
+    v1.state.database.dispose()
+    connection = sqlite3.connect(v1_path)
+    # v1 allowed the denormalized string to drift from its components. The
+    # migration must regenerate CC>>CC rather than reject this otherwise valid DB.
+    connection.execute("UPDATE reactions SET reaction_smiles = 'N>>[N-]' WHERE id = ?", (created["id"],))
+    connection.execute("DELETE FROM schema_metadata WHERE key = 'schema_revision'")
+    connection.execute("INSERT INTO schema_metadata (key, value) VALUES ('schema_version', '1')")
+    connection.commit()
+    connection.close()
+    migrated_v1 = create_app(f"sqlite:///{v1_path}")
+    with TestClient(migrated_v1) as client:
+        listed = client.get("/api/reactions").json()["items"][0]
+        assert listed["reaction_smiles"] == "[CH3:1][CH3:2]>>[CH3:1][CH3:2]"
+        assert "Reaction SMILES unavailable" not in client.get(f"/api/reactions/{listed['id']}/ai-copy").json()["text"]
+        assert client.post("/api/reactions/validate", json=payload()).json()["duplicate_reaction_ids"] == [listed["id"]]
+
+    rev2_path = tmp_path / "rev2-sru.sqlite3"
+    rev2 = create_app(f"sqlite:///{rev2_path}")
+    sru_payload = {
+        "editor_structure_data": '{"sgroups":[{"type":"SRU"}]}',
+        "components": [
+            {"role": "REACTANT", "structure": "C=C(C)"},
+            {"role": "PRODUCT", "structure": "[*]CC(C)[*]"},
+        ],
+    }
+    with TestClient(rev2) as client:
+        reaction_id = client.post("/api/reactions", json=sru_payload).json()["id"]
+    rev2.state.database.dispose()
+    connection = sqlite3.connect(rev2_path)
+    connection.execute("UPDATE components SET coefficient = '1' WHERE reaction_id = ?", (reaction_id,))
+    connection.execute("UPDATE reactions SET validation_mode = 'LIMITED' WHERE id = ?", (reaction_id,))
+    connection.execute("UPDATE validation_results SET validation_mode = 'LIMITED' WHERE reaction_id = ?", (reaction_id,))
+    connection.execute("UPDATE schema_metadata SET value = '2026-08-14.2' WHERE key = 'schema_revision'")
+    connection.commit()
+    connection.close()
+    migrated_rev2 = create_app(f"sqlite:///{rev2_path}")
+    with TestClient(migrated_rev2) as client:
+        result = client.get(f"/api/reactions/{reaction_id}").json()
+        assert result["validation_mode"] == "REPEAT_UNIT"
+        assert result["validation"]["element_balance_status"] == "PASS"
+
+
+def test_current_sru_one_sided_n_is_normalized_and_persisted_on_revalidate(tmp_path: Path) -> None:
+    path = tmp_path / "current.sqlite3"
+    app = create_app(f"sqlite:///{path}")
+    payload_sru = {
+        "editor_structure_data": '{"sgroups":[{"type":"SRU"}]}',
+        "components": [
+            {"role": "REACTANT", "structure": "C=C(C)"},
+            {"role": "PRODUCT", "structure": "[*]CC(C)[*]", "coefficient": "n"},
+        ],
+    }
+    with TestClient(app) as client:
+        reaction_id = client.post("/api/reactions", json=payload_sru).json()["id"]
+    app.state.database.dispose()
+    connection = sqlite3.connect(path)
+    connection.execute("UPDATE components SET coefficient = '1' WHERE reaction_id = ? AND role = 'REACTANT'", (reaction_id,))
+    connection.commit()
+    connection.close()
+    with TestClient(app) as client:
+        response = client.post(f"/api/reactions/{reaction_id}/revalidate")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert {component["coefficient"] for component in body["components"]} == {"n"}
+        assert body["validation"]["element_balance_status"] == "PASS"
+        assert body["validation"]["charge_balance_status"] == "PASS"
+    connection = sqlite3.connect(path)
+    assert {row[0] for row in connection.execute("SELECT coefficient FROM components WHERE reaction_id = ?", (reaction_id,))} == {"n"}
+    connection.close()

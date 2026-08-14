@@ -141,6 +141,8 @@ def _has_ambiguous_bond(component: ComponentDraft, molecule: Chem.Mol) -> bool:
 
 def _is_supported_linear_repeat_unit(components: list[tuple[int, ComponentDraft, Chem.Mol | None]], parsed: dict[int, Chem.Mol | None]) -> bool:
     """Recognize only the small, explicit linear SRU subset supported in v1."""
+    if sum(component.role is ComponentRole.REACTANT for _, component, _ in components) != 1:
+        return False
     product_units: list[Chem.Mol] = []
     for index, component, _ in components:
         if component.role is not ComponentRole.PRODUCT:
@@ -169,7 +171,7 @@ def _is_supported_linear_repeat_unit(components: list[tuple[int, ComponentDraft,
 
 def normalize_supported_repeat_coefficient(draft: ReactionDraft) -> bool:
     """Infer the one supported symbolic n from structural SRU metadata only."""
-    if any(component.coefficient == "n" for component in draft.components) or not _editor_polymer_markers(draft):
+    if not _editor_polymer_markers(draft):
         return False
     parsed = {index: mol_from_structure(component.structure) for index, component in enumerate(draft.components)}
     reactive = _reactive_components(draft)
@@ -178,12 +180,19 @@ def normalize_supported_repeat_coefficient(draft: ReactionDraft) -> bool:
     molecules = [(index, component, parsed[index]) for index, component in reactive]
     if not _is_supported_linear_repeat_unit(molecules, parsed):
         return False
+    changed = False
     for index, component in reactive:
         molecule = parsed[index]
         if component.role is ComponentRole.PRODUCT and molecule is not None and any(atom.GetAtomicNum() == 0 for atom in molecule.GetAtoms()):
-            component.coefficient = "n"
-            return True
-    return False
+            if component.coefficient != "n":
+                component.coefficient = "n"
+                changed = True
+            reactant = next(candidate for _, candidate in reactive if candidate.role is ComponentRole.REACTANT)
+            if reactant.coefficient != "n":
+                reactant.coefficient = "n"
+                changed = True
+            return changed
+    return changed
 
 
 def _reactive_components(draft: ReactionDraft) -> list[tuple[int, ComponentDraft]]:

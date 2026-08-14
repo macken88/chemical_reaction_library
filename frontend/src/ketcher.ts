@@ -1,9 +1,11 @@
-export type KetcherImageFormat = "svg" | "png";
+import type { GenerateImageOptions } from "ketcher-core";
+
+export type KetcherImageFormat = GenerateImageOptions["outputFormat"];
 
 export interface KetcherApi {
   getSmiles: () => Promise<string>;
   setMolecule: (structure: string) => Promise<void | undefined>;
-  generateImage: (structure: string, options: { outputFormat: KetcherImageFormat; backgroundColor?: string }) => Promise<Blob>;
+  generateImage: (structure: string, options: GenerateImageOptions) => Promise<Blob>;
 }
 
 export type ImageCopyResult = "svg" | "png";
@@ -21,12 +23,14 @@ export async function copyKetcherImage(api: KetcherApi): Promise<ImageCopyResult
   if (!structure) throw new Error("構造式エディタにコピーできる構造がありません");
 
   try {
-    const svg = await api.generateImage(structure, { outputFormat: "svg", backgroundColor: "#fffdf7" });
+    // Ketcher 3.17's image option parser does not accept CSS hex colors here.
+    // Its default SVG/PNG background is valid and preserves a real image clipboard payload.
+    const svg = await api.generateImage(structure, { outputFormat: "svg" });
     await navigator.clipboard.write([clipboardItem("image/svg+xml", svg)]);
     return "svg";
   } catch (svgError) {
     try {
-      const png = await api.generateImage(structure, { outputFormat: "png", backgroundColor: "#fffdf7" });
+      const png = await api.generateImage(structure, { outputFormat: "png" });
       await navigator.clipboard.write([clipboardItem("image/png", png)]);
       return "png";
     } catch {
