@@ -1,8 +1,11 @@
 from pathlib import Path
 import base64
+import sqlite3
 
 from fastapi.testclient import TestClient
+import pytest
 
+from backend.db import SCHEMA_REVISION, SchemaContractError
 from backend.main import create_app
 
 
@@ -66,3 +69,90 @@ def test_backup_restore_requires_confirmation_and_restores_whole_database(tmp_pa
         restored = client.post("/api/restore", json={"backup_base64": encoded_backup, "confirmation_token": "RESTORE_LIBRARY"})
         assert restored.status_code == 200, restored.text
         assert client.get("/api/reactions").json()["total"] == 1
+
+
+def test_restore_rejects_metadata_only_database_without_changing_current_data(tmp_path: Path) -> None:
+    app = create_app(f"sqlite:///{tmp_path / 'library.sqlite3'}")
+    malformed = tmp_path / "metadata-only.sqlite3"
+    connection = sqlite3.connect(malformed)
+    connection.execute("CREATE TABLE schema_metadata (key TEXT PRIMARY KEY, value TEXT)")
+    connection.execute("INSERT INTO schema_metadata VALUES ('schema_revision', ?)", (SCHEMA_REVISION,))
+    connection.commit()
+    connection.close()
+    with TestClient(app) as client:
+        assert client.post("/api/reactions", json=payload()).status_code == 201
+        encoded = base64.b64encode(malformed.read_bytes()).decode()
+        response = client.post("/api/restore", json={"backup_base64": encoded, "confirmation_token": "RESTORE_LIBRARY"})
+        assert response.status_code == 422
+        assert client.get("/api/reactions").json()["total"] == 1
+
+
+def test_component_search_is_canonical_exact_and_requires_both_sides(tmp_path: Path) -> None:
+    app = create_app(f"sqlite:///{tmp_path / 'library.sqlite3'}")
+    with TestClient(app) as client:
+        first = payload(reagents_text="", components=[
+            {"role": "REACTANT", "structure": "[CH3:1][CH3:2]", "display_name": "special display reagent"},
+            {"role": "PRODUCT", "structure": "[CH3:1][CH3:2]"},
+        ])
+        second = payload(name="alcohol", reaction_smiles="[CH3:1][CH3:2]>>[CH3:1][OH:2]", components=[
+            {"role": "REACTANT", "structure": "[CH3:1][CH3:2]"},
+            {"role": "PRODUCT", "structure": "[CH3:1][OH:2]"},
+        ])
+        assert client.post("/api/reactions", json=first).status_code == 201
+        assert client.post("/api/reactions", json=second).status_code == 201
+        by_display_name = client.post("/api/reactions/search", json={"reagent": "special display"})
+        assert by_display_name.json()["total"] == 1
+        exact_and = client.post("/api/reactions/search", json={"reactant": "C(C)", "product": "CO"})
+        assert exact_and.status_code == 200
+        assert exact_and.json()["total"] == 1
+        impossible_and = client.post("/api/reactions/search", json={"reactant": "CC", "product": "CC"})
+        assert impossible_and.json()["total"] == 1
+
+
+def test_startup_rejects_partial_or_unknown_schema_revision(tmp_path: Path) -> None:
+    partial = tmp_path / "partial.sqlite3"
+    connection = sqlite3.connect(partial)
+    connection.execute("CREATE TABLE schema_metadata (key TEXT PRIMARY KEY, value TEXT)")
+    connection.execute("INSERT INTO schema_metadata VALUES ('schema_revision', 'future')")
+    connection.commit()
+    connection.close()
+    with pytest.raises(RuntimeError):
+        create_app(f"sqlite:///{partial}")
+    future = tmp_path / "future.sqlite3"
+    create_app(f"sqlite:///{future}").state.database.dispose()
+    connection = sqlite3.connect(future)
+    connection.execute("UPDATE schema_metadata SET value = 'future' WHERE key = 'schema_revision'")
+    connection.commit()
+    connection.close()
+    with pytest.raises(RuntimeError, match="unsupported schema revision"):
+        create_app(f"sqlite:///{future}")
+
+
+def test_restore_engine_health_failure_rolls_back_original_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "library.sqlite3"
+    app = create_app(f"sqlite:///{path}")
+    with TestClient(app) as client:
+        assert client.post("/api/reactions", json=payload(name="original")).status_code == 201
+    database = app.state.database
+    candidate, rollback = tmp_path / "candidate.sqlite3", tmp_path / "rollback.sqlite3"
+    database.backup_to(candidate)
+    connection = sqlite3.connect(candidate)
+    connection.execute("UPDATE reactions SET name = 'candidate'")
+    connection.commit()
+    connection.close()
+    original_health_check = database.health_check
+    calls = 0
+
+    def fail_once() -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise SchemaContractError("simulated post-replace health failure")
+        return original_health_check()
+
+    monkeypatch.setattr(database, "health_check", fail_once)
+    with pytest.raises(SchemaContractError, match="previous database was restored"):
+        database.replace_with(candidate, rollback)
+    connection = sqlite3.connect(path)
+    assert connection.execute("SELECT name FROM reactions").fetchone()[0] == "original"
+    connection.close()

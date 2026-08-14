@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Any
 
@@ -41,11 +42,14 @@ class ComponentDraft(BaseModel):
         if text.lower() == "n":
             return "n"
         try:
-            if float(text) <= 0:
-                raise ValueError
-        except (TypeError, ValueError):
+            decimal = Decimal(text)
+            if not decimal.is_finite() or decimal <= 0:
+                raise InvalidOperation
+        except (InvalidOperation, TypeError, ValueError):
             raise ValueError("coefficient must be a positive number or the single symbol n")
-        return text
+        # Avoid equivalent representations (1.0, 01, 1e0) producing different
+        # persisted drafts, balances, or duplicate representations.
+        return format(decimal.normalize(), "f")
 
 
 class ReactionDraft(BaseModel):
@@ -59,6 +63,31 @@ class ReactionDraft(BaseModel):
     warning_reason: str | None = None
     tags: list[str] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def normalize_and_validate_representation(self) -> "ReactionDraft":
+        if not any(component.role is ComponentRole.REACTANT for component in self.components):
+            raise ValueError("at least one REACTANT component is required")
+        if not any(component.role is ComponentRole.PRODUCT for component in self.components):
+            raise ValueError("at least one PRODUCT component is required")
+        # Local import avoids a module cycle while ensuring this invariant is the
+        # same for parse, validate, create, and update requests.
+        from backend.chemistry import canonical_reaction_smiles, classify, mol_from_structure
+
+        generated = canonical_reaction_smiles(self.components)
+        parsed = {index: mol_from_structure(component.structure) for index, component in enumerate(self.components)}
+        mode = classify(self, parsed)
+        if mode is ValidationMode.LIMITED and not (self.editor_structure_data and self.editor_structure_data.strip()):
+            raise ValueError("LIMITED drafts require editor_structure_data for safe re-display")
+        if self.reaction_smiles:
+            try:
+                expected_from_input = canonical_reaction_smiles_from_input(self.reaction_smiles)
+            except ValueError as exc:
+                raise ValueError(f"reaction_smiles is invalid: {exc}") from exc
+            if generated is None or expected_from_input != generated:
+                raise ValueError("reaction_smiles does not match the supplied components")
+        self.reaction_smiles = generated
+        return self
+
     @field_validator("tags")
     @classmethod
     def validate_tags(cls, tags: list[str]) -> list[str]:
@@ -70,6 +99,17 @@ class ReactionDraft(BaseModel):
             if clean not in result:
                 result.append(clean)
         return result
+
+
+def canonical_reaction_smiles_from_input(value: str) -> str:
+    """Canonicalize without building a Pydantic draft (which would recurse)."""
+    from backend.chemistry import canonical_reaction_smiles, parse_reaction_components
+
+    return canonical_reaction_smiles(parse_reaction_components(value)) or _raise_invalid_reaction_smiles()
+
+
+def _raise_invalid_reaction_smiles() -> str:
+    raise ValueError("contains a non-canonicalizable component")
 
 
 class ParseRequest(BaseModel):
@@ -141,7 +181,7 @@ class BackupResponse(BaseModel):
 
 class RestoreRequest(BaseModel):
     backup_token: str | None = Field(default=None, min_length=20, description="Token returned by /api/backup")
-    backup_base64: str | None = Field(default=None, description="Base64-encoded downloaded SQLite backup")
+    backup_base64: str | None = Field(default=None, max_length=16 * 1024 * 1024, description="Base64-encoded downloaded SQLite backup (maximum 16 MiB)")
     confirmation_token: str = Field(description="Must exactly be RESTORE_LIBRARY")
 
     @model_validator(mode="after")

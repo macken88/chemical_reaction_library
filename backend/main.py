@@ -2,20 +2,18 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import secrets
 import shutil
-import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Response, status
 from fastapi.responses import FileResponse
-from sqlalchemy import String, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from backend.chemistry import VALIDATOR_VERSION, canonical_smiles, component_matches_substructure, parse_reaction, validate_draft
-from backend.db import Database, SCHEMA_VERSION
+from backend.chemistry import canonical_smiles, component_matches_substructure, is_valid_substructure_query, parse_reaction, validate_draft
+from backend.db import Database, SCHEMA_REVISION, SCHEMA_VERSION, SchemaContractError, validate_sqlite_schema
 from backend.models import Component, Reaction, SchemaMetadata, Tag, ValidationResult
 from backend.schemas import (
     AICopyResponse,
@@ -168,23 +166,6 @@ def _load_reaction(session: Session, reaction_id: int) -> Reaction:
     return reaction
 
 
-def _validate_backup(path: Path) -> str:
-    try:
-        connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
-        try:
-            integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
-            version = connection.execute("SELECT value FROM schema_metadata WHERE key = 'schema_version'").fetchone()
-        finally:
-            connection.close()
-    except sqlite3.Error as exc:
-        raise HTTPException(status_code=422, detail=f"Backup is not a valid reaction-library SQLite database: {exc}") from exc
-    if integrity != "ok" or version is None:
-        raise HTTPException(status_code=422, detail="Backup integrity or schema metadata validation failed")
-    if version[0] != SCHEMA_VERSION:
-        raise HTTPException(status_code=422, detail=f"Unsupported backup schema version: {version[0]}")
-    return version[0]
-
-
 def create_app(database_url: str | None = None) -> FastAPI:
     database = Database(database_url)
     database.create_all()
@@ -197,8 +178,10 @@ def create_app(database_url: str | None = None) -> FastAPI:
 
     @app.get("/api/schema-version", response_model=SchemaVersionResponse)
     def schema_version(session: Session = Depends(get_session)) -> SchemaVersionResponse:
-        value = session.get(SchemaMetadata, "schema_version")
-        return SchemaVersionResponse(schema_version=value.value if value else SCHEMA_VERSION)
+        value = session.get(SchemaMetadata, "schema_revision")
+        if value is None or value.value != SCHEMA_REVISION:
+            raise HTTPException(status_code=503, detail="Database schema contract is not current")
+        return SchemaVersionResponse(schema_version=value.value)
 
     @app.post("/api/reactions/parse", response_model=ParseResponse)
     def parse(request: ParseRequest) -> ParseResponse:
@@ -239,15 +222,19 @@ def create_app(database_url: str | None = None) -> FastAPI:
             token = f"%{request.query}%"
             statement = statement.where(or_(Reaction.name.ilike(token), Reaction.reagents_text.ilike(token), Reaction.process_text.ilike(token), Reaction.notes.ilike(token)))
         if request.reagent:
-            statement = statement.where(Reaction.reagents_text.ilike(f"%{request.reagent}%"))
+            token = f"%{request.reagent}%"
+            statement = statement.where(or_(Reaction.reagents_text.ilike(token), Reaction.components.any(Component.display_name.ilike(token))))
         if request.reactant or request.product:
-            statement = statement.join(Reaction.components)
-            filters = []
             if request.reactant:
-                filters.append((Component.role == "REACTANT") & (Component.structure.ilike(f"%{request.reactant}%")))
+                canonical = canonical_smiles(request.reactant)
+                if canonical is None:
+                    raise HTTPException(status_code=422, detail="reactant must be valid SMILES")
+                statement = statement.where(Reaction.components.any((Component.role == "REACTANT") & (Component.canonical_smiles == canonical)))
             if request.product:
-                filters.append((Component.role == "PRODUCT") & (Component.structure.ilike(f"%{request.product}%")))
-            statement = statement.where(or_(*filters))
+                canonical = canonical_smiles(request.product)
+                if canonical is None:
+                    raise HTTPException(status_code=422, detail="product must be valid SMILES")
+                statement = statement.where(Reaction.components.any((Component.role == "PRODUCT") & (Component.canonical_smiles == canonical)))
         if request.validation_status:
             value = request.validation_status.value
             statement = statement.join(Reaction.validation_result).where(
@@ -260,9 +247,7 @@ def create_app(database_url: str | None = None) -> FastAPI:
 
     @app.post("/api/search/substructure", response_model=ReactionListResponse)
     def substructure_search(request: SubstructureSearchRequest, session: Session = Depends(get_session)) -> ReactionListResponse:
-        # Parse up-front to make malformed user/editor data a clear contract error.
-        from rdkit import Chem
-        if Chem.MolFromSmarts(request.structure) is None and canonical_smiles(request.structure) is None:
+        if not is_valid_substructure_query(request.structure):
             raise HTTPException(status_code=422, detail="Search structure is not valid SMILES or SMARTS")
         statement = select(Reaction).options(selectinload(Reaction.components), selectinload(Reaction.tags), selectinload(Reaction.validation_result))
         matched: list[Reaction] = []
@@ -313,7 +298,7 @@ def create_app(database_url: str | None = None) -> FastAPI:
     def ai_copy(reaction_id: int, session: Session = Depends(get_session)) -> AICopyResponse:
         reaction = _load_reaction(session, reaction_id)
         validation = _validation_from_model(reaction.validation_result)
-        representation = reaction.reaction_smiles or reaction.editor_structure_data or "No serializable reaction representation"
+        representation = reaction.reaction_smiles if validation and validation.representation_status is CheckStatus.PASS else "No verified Reaction SMILES representation; retained editor structure data is available."
         validation_lines = "Not yet run" if validation is None else "\n".join([
             f"- Coverage: {validation.validation_mode.value}",
             f"- Structure: {validation.structure_status.value}",
@@ -326,11 +311,17 @@ def create_app(database_url: str | None = None) -> FastAPI:
 
     @app.post("/api/backup", response_model=BackupResponse)
     def backup() -> BackupResponse:
-        backup_dir = database.file_path.parent / "backups"
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        token = secrets.token_urlsafe(32)
-        path = backup_dir / f"reaction-library-{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{token[:8]}.sqlite3"
-        database.backup_to(path)
+        with database.maintenance():
+            backup_dir = database.file_path.parent / "backups"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            token = secrets.token_urlsafe(32)
+            path = backup_dir / f"reaction-library-{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{token[:8]}.sqlite3"
+            database.backup_to(path)
+            try:
+                validate_sqlite_schema(path)
+            except SchemaContractError as exc:
+                path.unlink(missing_ok=True)
+                raise HTTPException(status_code=503, detail=f"Database backup health check failed: {exc}") from exc
         app.state.backups[token] = path
         return BackupResponse(backup_token=token, filename=path.name, schema_version=SCHEMA_VERSION)
 
@@ -356,25 +347,28 @@ def create_app(database_url: str | None = None) -> FastAPI:
             except (ValueError, OSError) as exc:
                 source.unlink(missing_ok=True)
                 raise HTTPException(status_code=422, detail="backup_base64 is not valid base64 data") from exc
-        try:
-            schema_version = _validate_backup(source)
-        except HTTPException:
-            if uploaded_source:
-                source.unlink(missing_ok=True)
-            raise
         destination = database.file_path
-        candidate = destination.with_suffix(destination.suffix + ".restore-candidate")
-        shutil.copy2(source, candidate)
-        # Close the current request connection before replacing a SQLite file.
-        session.close()
-        database.dispose()
+        candidate = destination.with_suffix(destination.suffix + f".restore-{secrets.token_hex(8)}.candidate")
+        rollback = destination.with_suffix(destination.suffix + f".restore-{secrets.token_hex(8)}.rollback")
+        # A full copy is made before any engine is disposed or database path is
+        # replaced.  The candidate itself is schema-validated in replace_with.
         try:
-            os.replace(candidate, destination)
+            shutil.copyfile(source, candidate)
         except OSError as exc:
             candidate.unlink(missing_ok=True)
             if uploaded_source:
                 source.unlink(missing_ok=True)
-            raise HTTPException(status_code=409, detail=f"Could not replace the active database: {exc}") from exc
+            raise HTTPException(status_code=409, detail=f"Could not stage restore candidate: {exc}") from exc
+        session.close()
+        try:
+            schema_version = database.replace_with(candidate, rollback)
+        except (OSError, SchemaContractError) as exc:
+            candidate.unlink(missing_ok=True)
+            if uploaded_source:
+                source.unlink(missing_ok=True)
+            raise HTTPException(status_code=422, detail=f"Restore rejected or rolled back: {exc}") from exc
+        finally:
+            rollback.unlink(missing_ok=True)
         if uploaded_source:
             source.unlink(missing_ok=True)
         return RestoreResponse(restored=True, schema_version=schema_version)
