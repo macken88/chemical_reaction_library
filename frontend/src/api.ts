@@ -59,9 +59,10 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const hasFormData = typeof FormData !== "undefined" && init?.body instanceof FormData;
   const response = await fetch(`/api${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    headers: { ...(hasFormData ? {} : { "Content-Type": "application/json" }), ...init?.headers },
   });
   if (!response.ok) {
     let detail = "サーバーが処理を完了できませんでした。入力内容または接続を確認してください。";
@@ -92,7 +93,16 @@ export const api = {
   substructure: async (structure: string, target: "REACTANT" | "PRODUCT" | "BOTH") => (await request<{ items: Reaction[] }>("/search/substructure", json("POST", { structure, target }))).items,
   aiCopy: (id: number) => request<{ text: string }>(`/reactions/${id}/ai-copy`),
   backup: () => request<{ backup_token: string; filename: string; schema_version: string }>("/backup", json("POST")),
-  restore: (backupToken: string) => request<{ restored: boolean; schema_version: string }>("/restore", json("POST", { backup_token: backupToken, confirmation_token: "RESTORE_LIBRARY" })),
+  restore: (backupToken: string) => request<{ restored: boolean; schema_version: string }>("/restore", json("POST", {
+    confirmation_token: "RESTORE_LIBRARY",
+    backup_token: backupToken,
+  })),
+  restoreUpload: (file: File) => {
+    const body = new FormData();
+    body.append("backup_file", file);
+    body.append("confirmation_token", "RESTORE_LIBRARY");
+    return request<{ restored: boolean; schema_version: string }>("/restore/upload", { method: "POST", body });
+  },
   schemaVersion: () => request<{ schema_version: string }>("/schema-version"),
 };
 

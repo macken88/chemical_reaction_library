@@ -12,7 +12,7 @@ export interface KetcherEditorHandle {
 
 export interface KetcherEditorProps {
   value: string;
-  onImport: (structure: string) => void;
+  onImport: (structure: string) => void | Promise<void>;
   label: string;
   compact?: boolean;
 }
@@ -46,8 +46,15 @@ export const KetcherEditor = forwardRef<KetcherEditorHandle, KetcherEditorProps>
     const structure = await api.current.getSmiles();
     if (!structure) throw new Error("Ketcher に構造がありません。構造式を描いてから取り込んでください。");
     lastLoaded.current = structure;
-    onImport(structure);
-    return structure;
+    try {
+      await onImport(structure);
+      setLoadError("");
+      return structure;
+    } catch (error) {
+      const detail = error instanceof Error && error.message ? error.message : "描画内容を Draft に取り込めませんでした。";
+      setLoadError(detail);
+      throw error;
+    }
   }
 
   useImperativeHandle(ref, () => ({
@@ -69,7 +76,32 @@ export const KetcherEditor = forwardRef<KetcherEditorHandle, KetcherEditorProps>
         disableMacromoleculesEditor={false}
       />
     </div>
-    {loadError && <p className="ketcher__error" role="status">{loadError}</p>}
-    <div className="ketcher__footer"><span>描画内容は明示的に Draft へ取り込みます。</span><button className="quiet" type="button" disabled={!ready} onClick={() => void importDrawnStructure()}>描画内容を取り込む</button></div>
+    {loadError && <p className="ketcher__error" role="status" aria-live="polite">{loadError}</p>}
+    <div className="ketcher__footer"><span>描画内容は明示的に Draft へ取り込みます。</span><button className="quiet" type="button" disabled={!ready} onClick={() => void importDrawnStructure().catch(() => undefined)}>描画内容を取り込む</button></div>
   </section>;
 });
+
+/** A local Ketcher adapter is also used for SVG previews; text is only a failure fallback. */
+export function KetcherSvgPreview({ structure, alt }: { structure: string; alt: string }) {
+  const provider = useMemo(() => new StandaloneStructServiceProvider(), []);
+  const [url, setUrl] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => () => { if (url) URL.revokeObjectURL(url); }, [url]);
+
+  if (!structure) return <span className="reaction-preview__fallback">構造未記入</span>;
+  return <div className="reaction-preview__image">
+    <Editor
+      staticResourcesUrl="/"
+      structServiceProvider={provider}
+      errorHandler={() => setError("構造式プレビューを生成できませんでした。")}
+      onInit={(editor) => {
+        void asAdapter(editor).generateImage(structure, { outputFormat: "svg", backgroundColor: "#f1ebdf" })
+          .then((image) => { setUrl(URL.createObjectURL(image)); setError(""); })
+          .catch(() => setError("構造式プレビューを生成できませんでした。"));
+      }}
+      disableMacromoleculesEditor={false}
+    />
+    {url ? <img src={url} alt={alt} /> : error ? <span className="reaction-preview__fallback">{error}<br />{structure}</span> : <span className="reaction-preview__loading">構造式を描画中…</span>}
+  </div>;
+}
