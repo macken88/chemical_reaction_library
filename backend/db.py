@@ -43,6 +43,60 @@ class Base(DeclarativeBase):
     pass
 
 
+def _validate_materialized_rows(connection: sqlite3.Connection) -> None:
+    """Run persisted data through the same contracts used by HTTP writes."""
+    from pydantic import ValidationError
+
+    from backend.chemistry import validate_draft
+    from backend.schemas import CheckStatus, ComponentDraft, ReactionDraft, ValidationResponse
+
+    for reaction_id, name, reaction_smiles, editor_data, validation_mode, reagents, process, notes, warning_reason in connection.execute(
+        "SELECT id, name, reaction_smiles, editor_structure_data, validation_mode, reagents_text, process_text, notes, warning_reason FROM reactions"
+    ):
+        component_rows = connection.execute(
+            "SELECT role, structure, coefficient, display_name FROM components WHERE reaction_id = ? ORDER BY id", (reaction_id,)
+        ).fetchall()
+        tag_rows = connection.execute(
+            "SELECT t.name FROM tags t JOIN reaction_tags rt ON rt.tag_id = t.id WHERE rt.reaction_id = ?", (reaction_id,)
+        ).fetchall()
+        if any(not isinstance(row[0], str) for row in tag_rows):
+            raise SchemaContractError(f"reaction {reaction_id} has a non-string tag")
+        result = connection.execute(
+            "SELECT validation_mode, representation_status, structure_status, element_balance_status, charge_balance_status, mapping_status, bond_change_summary, element_difference_json, warnings_json, validator_version, validated_at FROM validation_results WHERE reaction_id = ?", (reaction_id,)
+        ).fetchone()
+        if result is None:
+            raise SchemaContractError(f"reaction {reaction_id} is missing its latest validation result")
+        try:
+            element_difference = json.loads(result[7])
+            warnings = json.loads(result[8])
+            if not isinstance(element_difference, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in element_difference.items()):
+                raise ValueError("element_difference_json must be string:string")
+            if not isinstance(warnings, list) or not all(isinstance(item, str) for item in warnings):
+                raise ValueError("warnings_json must be a string list")
+            draft = ReactionDraft(
+                name=name,
+                reaction_smiles=reaction_smiles,
+                editor_structure_data=editor_data,
+                components=[ComponentDraft(role=role, structure=structure, coefficient=coefficient, display_name=display_name) for role, structure, coefficient, display_name in component_rows],
+                reagents_text=reagents,
+                process_text=process,
+                notes=notes,
+                warning_reason=warning_reason,
+                tags=[row[0] for row in tag_rows],
+            )
+            bond_status = CheckStatus.INFO if result[5] == CheckStatus.PASS else CheckStatus.NOT_EVALUABLE
+            validation = ValidationResponse(
+                validation_mode=result[0], representation_status=result[1], structure_status=result[2],
+                element_balance_status=result[3], charge_balance_status=result[4], mapping_status=result[5],
+                bond_change_status=bond_status, bond_change_summary=result[6], element_difference=element_difference,
+                warnings=warnings, validator_version=result[9], validated_at=result[10],
+            )
+        except (ValidationError, TypeError, ValueError) as exc:
+            raise SchemaContractError(f"reaction {reaction_id} cannot be materialized under the current contract: {exc}") from exc
+        if validation.validation_mode.value != validation_mode or validate_draft(draft).validation_mode != validation.validation_mode:
+            raise SchemaContractError(f"reaction {reaction_id} validation coverage is inconsistent with its draft")
+
+
 def validate_sqlite_schema(path: Path, *, require_current_revision: bool = True) -> str:
     """Verify that a candidate is a complete, current library database."""
     try:
@@ -110,6 +164,7 @@ def validate_sqlite_schema(path: Path, *, require_current_revision: bool = True)
                         raise ValueError
                 except (TypeError, ValueError, json.JSONDecodeError):
                     raise SchemaContractError(f"validation result {result_id} has invalid JSON fields")
+            _validate_materialized_rows(connection)
         finally:
             connection.close()
     except (sqlite3.Error, OSError) as exc:
@@ -127,8 +182,8 @@ def _sqlite_backup(source_path: Path, destination_path: Path) -> None:
         source.close()
 
 
-def migrate_legacy_schema_v1(path: Path) -> bool:
-    """Migrate only the known schema_version=1 metadata contract transactionally."""
+def migrate_known_schema(path: Path) -> bool:
+    """Migrate only known v1 metadata or the immediate .2 revision transactionally."""
     try:
         validate_sqlite_schema(path, require_current_revision=False)
         connection = sqlite3.connect(path)
@@ -139,17 +194,22 @@ def migrate_legacy_schema_v1(path: Path) -> bool:
             connection.close()
     except SchemaContractError:
         raise
-    if revision is not None:
-        return False
-    if legacy is None or legacy[0] != "1":
-        raise SchemaContractError("database does not declare a supported legacy schema_version=1")
-    snapshot = path.with_suffix(path.suffix + ".legacy-v1-pre-migration.sqlite3")
+    if revision is None and legacy is not None and legacy[0] == "1":
+        migration_kind = "legacy-v1"
+    elif revision is not None and revision[0] == "2026-08-14.2":
+        migration_kind = "schema-2026-08-14.2"
+    else:
+        raise SchemaContractError("database does not declare a supported migration revision")
+    snapshot = path.with_suffix(path.suffix + f".{migration_kind}-pre-migration.sqlite3")
     _sqlite_backup(path, snapshot)
     try:
         connection = sqlite3.connect(path)
         try:
             connection.execute("BEGIN IMMEDIATE")
-            connection.execute("INSERT INTO schema_metadata (key, value) VALUES ('schema_revision', ?)", (SCHEMA_REVISION,))
+            if revision is None:
+                connection.execute("INSERT INTO schema_metadata (key, value) VALUES ('schema_revision', ?)", (SCHEMA_REVISION,))
+            else:
+                connection.execute("UPDATE schema_metadata SET value = ? WHERE key = 'schema_revision'", (SCHEMA_REVISION,))
             connection.commit()
         finally:
             connection.close()
@@ -212,9 +272,9 @@ class Database:
                 try:
                     validate_sqlite_schema(path)
                 except SchemaContractError as exc:
-                    if "schema_revision is missing" not in str(exc):
+                    if "schema_revision is missing" not in str(exc) and "unsupported schema revision: 2026-08-14.2" not in str(exc):
                         raise
-                    migrate_legacy_schema_v1(path)
+                    migrate_known_schema(path)
                     validate_sqlite_schema(path)
                 return
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -291,9 +351,9 @@ class Database:
             try:
                 validate_sqlite_schema(candidate)
             except SchemaContractError as exc:
-                if "schema_revision is missing" not in str(exc):
+                if "schema_revision is missing" not in str(exc) and "unsupported schema revision: 2026-08-14.2" not in str(exc):
                     raise
-                migrate_legacy_schema_v1(candidate)
+                migrate_known_schema(candidate)
                 validate_sqlite_schema(candidate)
             self._backup_to(rollback_snapshot)
             destination = self.file_path

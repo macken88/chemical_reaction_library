@@ -9,6 +9,7 @@ from typing import Iterable
 
 from rdkit import Chem
 from rdkit.Chem import rdChemReactions
+from rdkit.Chem.Draw import rdMolDraw2D
 
 from backend.schemas import CheckStatus, ComponentDraft, ComponentRole, ParseResponse, ReactionDraft, ValidationMode, ValidationResponse
 
@@ -86,16 +87,22 @@ def _parse_rxn(text: str) -> ParseResponse:
     if reaction is None:
         raise ValueError("Unable to parse RXN")
     components: list[ComponentDraft] = []
+    rdkit_sru = False
     for role, molecules in ((ComponentRole.REACTANT, reaction.GetReactants()), (ComponentRole.PRODUCT, reaction.GetProducts())):
         for molecule in molecules:
             try:
+                try:
+                    rdkit_sru = rdkit_sru or any(group.HasProp("TYPE") and group.GetProp("TYPE").upper() == "SRU" for group in Chem.GetMolSubstanceGroups(molecule))
+                except AttributeError:
+                    pass
                 Chem.SanitizeMol(molecule)
                 components.append(ComponentDraft(role=role, structure=Chem.MolToSmiles(molecule, canonical=False)))
             except Exception as exc:
                 raise ValueError(f"RXN contains an invalid {role.value.lower()} structure: {exc}") from exc
     if not components:
         raise ValueError("RXN contains no reaction components")
-    return ParseResponse(draft=ReactionDraft(editor_structure_data=text, components=components))
+    editor_data = text + ("\n# RDKit-SRU" if rdkit_sru else "")
+    return ParseResponse(draft=ReactionDraft(editor_structure_data=editor_data, components=components))
 
 
 def _editor_polymer_markers(draft: ReactionDraft) -> bool:
@@ -111,6 +118,10 @@ def _editor_polymer_markers(draft: ReactionDraft) -> bool:
         if isinstance(components, list):
             relevant = " ".join(json.dumps(component).upper() for component in components if isinstance(component, dict) and component.get("role") in ("REACTANT", "PRODUCT"))
             return any(marker in relevant for marker in ("SRU", "S-GROUP", "SGROUP", "POLYMER", "CONNECTIONPOINT"))
+        if isinstance(payload, dict) and isinstance(payload.get("sgroups"), list):
+            # Ketcher serializes polymer repeat units as structured S-groups,
+            # which is stronger evidence than a free-text keyword.
+            return any(isinstance(group, dict) and str(group.get("type", "")).upper() == "SRU" for group in payload["sgroups"])
     except (TypeError, ValueError):
         pass
     # Reaction SMILES can be safely split into roles.  RXN does not classify as
@@ -146,10 +157,6 @@ def _is_supported_linear_repeat_unit(components: list[tuple[int, ComponentDraft,
     dummies = [atom for atom in unit.GetAtoms() if atom.GetAtomicNum() == 0]
     if len(dummies) != 2 or any(atom.GetDegree() != 1 for atom in dummies):
         return False
-    # A branching atom means this is no longer the simple linear homopolymer
-    # subset. Preserve it as LIMITED rather than overstating coverage.
-    if any(atom.GetAtomicNum() > 0 and atom.GetDegree() > 2 for atom in unit.GetAtoms()):
-        return False
     # Other reactive components must be finite monomers; dummy attachment
     # points on both sides represent a larger/ambiguous polymer graph.
     for index, component, _ in components:
@@ -158,6 +165,25 @@ def _is_supported_linear_repeat_unit(components: list[tuple[int, ComponentDraft,
         if component.role is not ComponentRole.PRODUCT and any(atom.GetAtomicNum() == 0 for atom in molecule.GetAtoms()):
             return False
     return True
+
+
+def normalize_supported_repeat_coefficient(draft: ReactionDraft) -> bool:
+    """Infer the one supported symbolic n from structural SRU metadata only."""
+    if any(component.coefficient == "n" for component in draft.components) or not _editor_polymer_markers(draft):
+        return False
+    parsed = {index: mol_from_structure(component.structure) for index, component in enumerate(draft.components)}
+    reactive = _reactive_components(draft)
+    if any(parsed[index] is None for index, _ in reactive):
+        return False
+    molecules = [(index, component, parsed[index]) for index, component in reactive]
+    if not _is_supported_linear_repeat_unit(molecules, parsed):
+        return False
+    for index, component in reactive:
+        molecule = parsed[index]
+        if component.role is ComponentRole.PRODUCT and molecule is not None and any(atom.GetAtomicNum() == 0 for atom in molecule.GetAtoms()):
+            component.coefficient = "n"
+            return True
+    return False
 
 
 def _reactive_components(draft: ReactionDraft) -> list[tuple[int, ComponentDraft]]:
@@ -328,3 +354,21 @@ def component_matches_substructure(structure: str, query: str) -> bool:
         return pattern is not None and molecule.HasSubstructMatch(pattern)
     except Exception:
         return False
+
+
+def reaction_svg(reaction_smiles: str) -> str:
+    """Render a self-contained, script-free reaction SVG from verified SMILES."""
+    try:
+        reaction = rdChemReactions.ReactionFromSmarts(reaction_smiles, useSmiles=True)
+    except Exception as exc:
+        raise ValueError("Reaction SMILES could not be rendered") from exc
+    if reaction is None:
+        raise ValueError("Reaction SMILES could not be rendered")
+    drawer = rdMolDraw2D.MolDraw2DSVG(900, 260)
+    drawer.DrawReaction(reaction)
+    drawer.FinishDrawing()
+    svg = drawer.GetDrawingText()
+    lowered = svg.lower()
+    if "<script" in lowered or "href=" in lowered or "xlink:href" in lowered:
+        raise ValueError("Generated SVG contained an unsafe external reference")
+    return svg

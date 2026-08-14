@@ -164,6 +164,7 @@ def test_restore_engine_health_failure_rolls_back_original_database(tmp_path: Pa
     ("mutation", "expected"),
     [
         ("UPDATE components SET role = 'BOGUS'", "invalid required domain"),
+        ("UPDATE components SET role = 'CONDITION' WHERE role = 'REACTANT'", "cannot be materialized"),
         ("UPDATE validation_results SET warnings_json = '{broken'", "invalid JSON"),
     ],
 )
@@ -272,3 +273,68 @@ def test_large_backup_upload_restore_round_trip(tmp_path: Path) -> None:
         )
         assert restored.status_code == 200, restored.text
         assert client.get("/api/reactions").json()["total"] == 1
+
+
+def test_upload_restore_waits_without_blocking_active_api_session(tmp_path: Path) -> None:
+    app = create_app(f"sqlite:///{tmp_path / 'library.sqlite3'}")
+    with TestClient(app) as client:
+        assert client.post("/api/reactions", json=payload()).status_code == 201
+        backup = client.post("/api/backup").json()
+        raw = client.get(f"/api/backup/{backup['backup_token']}").content
+        session_generator = app.state.database.session()
+        next(session_generator)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(
+                client.post,
+                "/api/restore/upload",
+                data={"confirmation_token": "RESTORE_LIBRARY"},
+                files={"backup_file": ("library.sqlite3", raw, "application/vnd.sqlite3")},
+            )
+            time.sleep(0.1)
+            assert not pending.done()
+            session_generator.close()
+            assert pending.result(timeout=5).status_code == 200
+
+
+def test_schema_revision_2026_08_14_2_migrates_on_startup_and_restore(tmp_path: Path) -> None:
+    path = tmp_path / "library.sqlite3"
+    app = create_app(f"sqlite:///{path}")
+    app.state.database.dispose()
+    connection = sqlite3.connect(path)
+    connection.execute("UPDATE schema_metadata SET value = '2026-08-14.2' WHERE key = 'schema_revision'")
+    connection.commit()
+    connection.close()
+    migrated = create_app(f"sqlite:///{path}")
+    assert migrated.state.database.health_check() == SCHEMA_REVISION
+    assert (tmp_path / "library.sqlite3.schema-2026-08-14.2-pre-migration.sqlite3").is_file()
+    with TestClient(migrated) as client:
+        backup = client.post("/api/backup").json()
+        candidate = tmp_path / "revision-2.sqlite3"
+        candidate.write_bytes(client.get(f"/api/backup/{backup['backup_token']}").content)
+        connection = sqlite3.connect(candidate)
+        connection.execute("UPDATE schema_metadata SET value = '2026-08-14.2' WHERE key = 'schema_revision'")
+        connection.commit()
+        connection.close()
+        restored = client.post("/api/restore", json={"backup_base64": base64.b64encode(candidate.read_bytes()).decode(), "confirmation_token": "RESTORE_LIBRARY"})
+        assert restored.status_code == 200, restored.text
+
+
+def test_structure_svg_is_safe_and_limited_reactions_return_actionable_422(tmp_path: Path) -> None:
+    app = create_app(f"sqlite:///{tmp_path / 'library.sqlite3'}")
+    with TestClient(app) as client:
+        normal = client.post("/api/reactions", json=payload()).json()
+        svg = client.get(f"/api/reactions/{normal['id']}/structure.svg")
+        assert svg.status_code == 200
+        assert svg.headers["content-type"].startswith("image/svg+xml")
+        assert "<svg" in svg.text.lower()
+        assert "<script" not in svg.text.lower()
+        limited = client.post("/api/reactions", json={
+            "editor_structure_data": "retained editor payload",
+            "components": [
+                {"role": "REACTANT", "structure": "opaque-local"},
+                {"role": "PRODUCT", "structure": "opaque-local"},
+            ],
+        }).json()
+        unavailable = client.get(f"/api/reactions/{limited['id']}/structure.svg")
+        assert unavailable.status_code == 422
+        assert "verified Reaction SMILES" in unavailable.json()["detail"]

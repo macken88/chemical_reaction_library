@@ -71,8 +71,9 @@ class ReactionDraft(BaseModel):
             raise ValueError("at least one PRODUCT component is required")
         # Local import avoids a module cycle while ensuring this invariant is the
         # same for parse, validate, create, and update requests.
-        from backend.chemistry import canonical_reaction_smiles, classify, mol_from_structure
+        from backend.chemistry import canonical_reaction_smiles, classify, mol_from_structure, normalize_supported_repeat_coefficient
 
+        normalize_supported_repeat_coefficient(self)
         generated = canonical_reaction_smiles(self.components)
         parsed = {index: mol_from_structure(component.structure) for index, component in enumerate(self.components)}
         mode = classify(self, parsed)

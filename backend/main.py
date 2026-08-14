@@ -10,10 +10,11 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Response, UploadFile, status
 from fastapi.responses import FileResponse
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from backend.chemistry import canonical_smiles, component_matches_substructure, is_valid_substructure_query, parse_reaction, validate_draft
+from backend.chemistry import canonical_smiles, component_matches_substructure, is_valid_substructure_query, parse_reaction, reaction_svg, validate_draft
 from backend.db import Database, SCHEMA_REVISION, SCHEMA_VERSION, SchemaContractError, validate_sqlite_schema
 from backend.models import Component, Reaction, SchemaMetadata, Tag, ValidationResult
 from backend.schemas import (
@@ -322,6 +323,17 @@ def create_app(database_url: str | None = None, *, initialize: bool = True) -> F
         ])
         return AICopyResponse(text=f"Reaction:\n{representation}\n\nReagents / Catalysts / Conditions:\n{reaction.reagents_text}\n\nProcess:\n{reaction.process_text}\n\nNotes:\n{reaction.notes}\n\nValidation:\n{validation_lines}")
 
+    @app.get("/api/reactions/{reaction_id}/structure.svg", response_class=Response)
+    def structure_svg(reaction_id: int, session: Session = Depends(get_session)) -> Response:
+        reaction = _load_reaction(session, reaction_id)
+        if not reaction.reaction_smiles:
+            raise HTTPException(status_code=422, detail="This reaction has no verified Reaction SMILES; use retained editor structure data instead.")
+        try:
+            svg = reaction_svg(reaction.reaction_smiles)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"Structure preview cannot be generated: {exc}") from exc
+        return Response(content=svg, media_type="image/svg+xml")
+
     @app.post("/api/backup", response_model=BackupResponse)
     def backup() -> BackupResponse:
         with database.maintenance():
@@ -421,7 +433,7 @@ def create_app(database_url: str | None = None, *, initialize: bool = True) -> F
             raise HTTPException(status_code=409, detail=f"Could not stage uploaded backup: {exc}") from exc
         finally:
             await backup_file.close()
-        return _restore_from_file(source, uploaded_source=True)
+        return await run_in_threadpool(_restore_from_file, source, True)
 
     return app
 
