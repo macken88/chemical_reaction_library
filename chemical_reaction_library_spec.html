@@ -1,0 +1,860 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>化学反応検証・ライブラリアプリ 仕様書</title>
+<style>
+  :root{
+    --bg:#f6f7f9;
+    --card:#ffffff;
+    --text:#1f2937;
+    --muted:#667085;
+    --line:#d9dee7;
+    --accent:#275d8c;
+    --accent-soft:#eaf2f8;
+    --ok:#2f6f44;
+    --warn:#986b16;
+    --err:#9c3333;
+    --code:#f1f4f7;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans JP","Yu Gothic UI","Hiragino Kaku Gothic ProN",sans-serif;
+    line-height:1.75;
+  }
+  .page{max-width:1120px;margin:0 auto;padding:34px 28px 64px}
+  header{
+    background:linear-gradient(135deg,#173b5c,#275d8c);
+    color:white;
+    border-radius:18px;
+    padding:34px 38px;
+    margin-bottom:24px;
+  }
+  header h1{margin:0 0 8px;font-size:2rem;line-height:1.35}
+  header p{margin:0;opacity:.9}
+  .toc,.section{
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:14px;
+    padding:26px 30px;
+    margin:18px 0;
+  }
+  h2{margin:0 0 18px;color:#193f61;font-size:1.42rem}
+  h3{margin:24px 0 10px;font-size:1.08rem;color:#294f70}
+  h4{margin:18px 0 7px;font-size:1rem}
+  p{margin:8px 0 14px}
+  ul,ol{margin-top:7px}
+  li{margin:5px 0}
+  table{
+    width:100%;
+    border-collapse:collapse;
+    margin:14px 0 20px;
+    font-size:.95rem;
+  }
+  th,td{
+    border:1px solid var(--line);
+    padding:10px 12px;
+    vertical-align:top;
+    text-align:left;
+  }
+  th{background:#f1f5f8;color:#294f70}
+  code,pre{font-family:"Cascadia Code","Consolas","SFMono-Regular",monospace}
+  code{background:var(--code);padding:.08em .35em;border-radius:4px}
+  pre{
+    background:#18222c;
+    color:#eef4f8;
+    padding:18px 20px;
+    border-radius:10px;
+    overflow:auto;
+    line-height:1.55;
+  }
+  .flow{
+    background:#f7fafc;
+    border:1px solid #d8e3ec;
+    border-left:5px solid var(--accent);
+    padding:18px 20px;
+    border-radius:10px;
+    white-space:pre-wrap;
+    font-family:"Cascadia Code","Consolas",monospace;
+    line-height:1.55;
+  }
+  .note{
+    background:var(--accent-soft);
+    border-left:5px solid var(--accent);
+    padding:13px 16px;
+    border-radius:8px;
+    margin:14px 0;
+  }
+  .warn{
+    background:#fff7e7;
+    border-left:5px solid #c08a28;
+    padding:13px 16px;
+    border-radius:8px;
+    margin:14px 0;
+  }
+  .decision{
+    background:#edf7ef;
+    border-left:5px solid #4f855f;
+    padding:13px 16px;
+    border-radius:8px;
+    margin:14px 0;
+  }
+  .tag{
+    display:inline-block;
+    border-radius:999px;
+    padding:2px 9px;
+    margin:2px 3px 2px 0;
+    font-size:.82rem;
+    background:#eef2f6;
+    color:#425466;
+  }
+  .two{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:16px;
+  }
+  .mini{
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:16px 18px;
+    background:#fbfcfd;
+  }
+  .mini h4{margin-top:0;color:#294f70}
+  .status-ok{color:var(--ok);font-weight:600}
+  .status-warn{color:var(--warn);font-weight:600}
+  .status-err{color:var(--err);font-weight:600}
+  .muted{color:var(--muted)}
+  .small{font-size:.9rem}
+  a{color:#245c88}
+  .toc ul{columns:2;padding-left:20px}
+  footer{color:var(--muted);font-size:.85rem;text-align:center;margin-top:28px}
+  @media (max-width:760px){
+    .page{padding:16px}
+    header{padding:26px 22px}
+    .section,.toc{padding:20px}
+    .two{grid-template-columns:1fr}
+    .toc ul{columns:1}
+    table{font-size:.88rem}
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header>
+  <h1>化学反応検証・ライブラリアプリ 仕様書</h1>
+  <p>構造式編集、ルールベースValidation、ポリマー対応、反応ナレッジの保存・検索・外部連携を一体化する個人利用向けWebアプリ</p>
+</header>
+
+<nav class="toc">
+  <h2>目次</h2>
+  <ul>
+    <li><a href="#purpose">1. 目的・基本方針</a></li>
+    <li><a href="#scope">2. 初版の対象範囲</a></li>
+    <li><a href="#architecture">3. 技術構成</a></li>
+    <li><a href="#workflow">4. 全体ユーザーフロー</a></li>
+    <li><a href="#editor">5. Editor仕様</a></li>
+    <li><a href="#import">6. Import仕様</a></li>
+    <li><a href="#validation">7. Validation仕様</a></li>
+    <li><a href="#polymer">8. ポリマー対応</a></li>
+    <li><a href="#registration">9. 登録・編集・削除</a></li>
+    <li><a href="#library">10. Library・検索</a></li>
+    <li><a href="#external">11. 外部AI・Office連携</a></li>
+    <li><a href="#backup">12. バックアップ・復元</a></li>
+    <li><a href="#data">13. データモデル</a></li>
+    <li><a href="#api">14. バックエンド責務・API</a></li>
+    <li><a href="#ui">15. 画面構成</a></li>
+    <li><a href="#quality">16. 品質・テスト要件</a></li>
+    <li><a href="#future">17. 初版対象外・将来拡張</a></li>
+    <li><a href="#acceptance">18. 初版受入条件</a></li>
+  </ul>
+</nav>
+
+<section class="section" id="purpose">
+<h2>1. 目的・基本方針</h2>
+<p>本アプリは、化学反応を構造式として編集・確認し、決定論的なルールに基づくValidationを実施したうえで、実務上のメモとともに反応ライブラリへ保存・再利用することを目的とする。</p>
+
+<div class="decision">
+<strong>基本原則：</strong>アプリは「その反応が現実に起こること」を保証しない。構造表現、元素・電荷収支、原子価、atom mapping等の<strong>機械的に評価可能な整合性</strong>を検証し、最終的な登録判断はユーザーが行う。
+</div>
+
+<ul>
+  <li>入力経路は <strong>Editor</strong> と <strong>Import</strong> の2つに限定する。</li>
+  <li>どちらの入力も共通の <strong>Reaction Draft</strong> に変換し、登録直前に必ず共通Validationを通す。</li>
+  <li>Validation結果にWarningがあっても、保存可能な構造であればユーザー判断で登録できる。</li>
+  <li>ポリマー等、完全な分子として表現できない反応を排除しない。</li>
+  <li>外部AIはアプリ内に組み込まず、テキストコピー／Importを通じて疎結合に連携する。</li>
+  <li>個人利用を前提とし、配布・インストーラ最適化よりも実装の自然さと拡張性を優先する。</li>
+</ul>
+</section>
+
+<section class="section" id="scope">
+<h2>2. 初版の対象範囲</h2>
+
+<h3>2.1 対象反応</h3>
+<ul>
+  <li>低分子の通常化学反応</li>
+  <li>単純なホモポリマー</li>
+  <li>単一の記号 <code>n</code> で表現可能な重合・繰返し構造</li>
+  <li>架橋反応等、生成物全体を有限分子として完全表現できないが、局所構造として記録可能な反応</li>
+  <li>反応物、生成物に加え、触媒・溶媒・添加剤等の反応条件側成分を含む反応</li>
+</ul>
+
+<h3>2.2 初版では対象外</h3>
+<ul>
+  <li>複雑な共重合体、分岐ポリマー、統計的ポリマー組成の完全表現</li>
+  <li>複数の独立変数 <code>x</code>, <code>y</code> 等を用いる一般的な代数化学量論</li>
+  <li>BigSMILES等の高度なポリマー専用表記</li>
+  <li>AIによる自動化学妥当性判定</li>
+  <li>登録履歴・版管理</li>
+</ul>
+</section>
+
+<section class="section" id="architecture">
+<h2>3. 技術構成</h2>
+
+<table>
+<thead><tr><th>層</th><th>採用技術</th><th>役割</th></tr></thead>
+<tbody>
+<tr><td>Frontend</td><td>React + TypeScript + Vite</td><td>画面、状態管理、Ketcher統合、Library操作</td></tr>
+<tr><td>Chemical Editor</td><td>Ketcher</td><td>構造式・反応式の描画、編集、表示</td></tr>
+<tr><td>Backend</td><td>FastAPI + Pydantic</td><td>REST API、Validation、永続化との境界</td></tr>
+<tr><td>Chemistry Engine</td><td>RDKit</td><td>SMILES/RXN解析、原子・結合・原子価、元素収支、構造検索等</td></tr>
+<tr><td>Persistence</td><td>SQLite + SQLAlchemy</td><td>反応Library、タグ、Validation結果、メタデータ</td></tr>
+</tbody>
+</table>
+
+<div class="flow">React / Ketcher
+       │
+       │ REST API
+       ▼
+FastAPI
+       │
+       ├── chemistry/  ← GUI非依存のpure Python
+       │     ├─ parsing
+       │     ├─ validation
+       │     ├─ balance
+       │     ├─ classification
+       │     └─ search
+       │
+       └── database/
+             └─ SQLite</div>
+
+<div class="note">
+ValidationロジックはFastAPIやGUIに埋め込まず、単体テスト可能なpure Pythonモジュールとして実装する。
+</div>
+</section>
+
+<section class="section" id="workflow">
+<h2>4. 全体ユーザーフロー</h2>
+
+<div class="flow">                 ┌──────────────┐
+                 │ New Reaction │
+                 └──────┬───────┘
+                        │
+             ┌──────────┴──────────┐
+             ▼                     ▼
+         Editor                  Import
+             │                     │
+             │              Parse / Convert
+             │                     │
+             └─────────┬───────────┘
+                       ▼
+                Reaction Draft
+                       │
+            編集・メモ・タグ追加
+                       │
+                       ▼
+                  Validation
+                       │
+              ┌────────┴────────┐
+              ▼                 ▼
+          修正に戻る        登録する
+                                │
+                                ▼
+                             Library</div>
+
+<h3>4.1 共通原則</h3>
+<ul>
+  <li>EditorとImportで別々のValidation実装を持たない。</li>
+  <li>Import後のデータもEditorで確認・修正できる。</li>
+  <li>Validation画面は登録可否を自動決定せず、ユーザーへ判断材料を提示する。</li>
+  <li>保存済み反応の再編集時も、保存直前にValidationを再実行する。</li>
+</ul>
+</section>
+
+<section class="section" id="editor">
+<h2>5. Editor仕様</h2>
+
+<h3>5.1 構造編集</h3>
+<ul>
+  <li>Ketcher上で反応物・生成物を構造式として描画・編集できる。</li>
+  <li>触媒・溶媒・添加剤等を「反応条件側成分」として登録できる。</li>
+  <li>各成分は以下のいずれかの役割を持つ。
+    <ul>
+      <li>Reactant（反応物）</li>
+      <li>Product（生成物）</li>
+      <li>Condition component（触媒・溶媒・添加剤等）</li>
+    </ul>
+  </li>
+  <li>Condition componentは元素収支・電荷収支の対象外とする。</li>
+  <li>化学量論係数はユーザーが入力可能とする。</li>
+  <li>通常の数値係数と、初版では単一の <code>n</code> を扱える。</li>
+</ul>
+
+<h3>5.2 付帯情報</h3>
+<p>反応構造とは別に以下を入力できる。</p>
+<ul>
+  <li>反応名（任意）</li>
+  <li>タグ（複数）</li>
+  <li>試薬・触媒等に関する自由記述</li>
+  <li>加工工程・条件に関する自由記述</li>
+  <li>一般自由記述メモ</li>
+  <li>Validation Warningを許容して登録する理由（任意）</li>
+</ul>
+
+<p>市販試薬、メーカー、温度、時間、圧力等は初版では専用フィールドへ正規化せず、自由記述で扱う。</p>
+</section>
+
+<section class="section" id="import">
+<h2>6. Import仕様</h2>
+
+<h3>6.1 対応形式</h3>
+<ul>
+  <li>Reaction SMILES</li>
+  <li>RXN file</li>
+</ul>
+
+<h3>6.2 Importフロー</h3>
+<div class="flow">外部テキスト / RXN
+       │
+       ▼
+形式判定・Parse
+       │
+       ├─ 成功 → Reaction Draft生成
+       │            │
+       │            ▼
+       │        Editorでプレビュー・修正
+       │            │
+       │            ▼
+       │        Validation
+       │
+       └─ 失敗 → エラー内容表示
+                    │
+                    └─ 原文を保持して修正可能</div>
+
+<h3>6.3 Importの責務</h3>
+<p>Importは「登録機能」ではなく、外部表現をアプリ内部のReaction Draftへ変換する入力機能とする。Import直後の自動登録は禁止する。</p>
+</section>
+
+<section class="section" id="validation">
+<h2>7. Validation仕様</h2>
+
+<h3>7.1 Validationの役割</h3>
+<p>Validationは、入力された反応のうちアプリが機械的に確認できる範囲を検証し、結果と検証範囲をユーザーへ提示する。</p>
+
+<h3>7.2 自動Validationモード</h3>
+<p>ユーザーには反応タイプを選択させず、構造表現から自動判定する。</p>
+
+<table>
+<thead>
+<tr><th>内部モード</th><th>対象</th><th>主な検証範囲</th></tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>FULL</strong></td>
+<td>全成分を有限の完全構造として扱える反応</td>
+<td>構造、原子価、元素収支、電荷収支、atom mapping、結合変化</td>
+</tr>
+<tr>
+<td><strong>REPEAT_UNIT</strong></td>
+<td>単純ホモポリマー、SRU等の繰返し構造</td>
+<td>繰返し単位、接続点、局所原子価、単一nを考慮した単位収支</td>
+</tr>
+<tr>
+<td><strong>LOCAL</strong></td>
+<td>架橋等、全体ネットワークを有限分子で表せない反応</td>
+<td>描画された局所構造、反応部位、結合生成・切断、局所原子価</td>
+</tr>
+<tr>
+<td><strong>LIMITED</strong></td>
+<td>曖昧・不完全表現を含み、十分な構造検証ができない場合</td>
+<td>保存可能性、取得できる最小限の構造情報。評価不能項目を明示</td>
+</tr>
+</tbody>
+</table>
+
+<h3>7.3 自動分類の基本ロジック</h3>
+<pre>if complete_finite_structures_without_undefined_features:
+    mode = FULL
+elif contains_supported_repeat_unit:
+    mode = REPEAT_UNIT
+elif valid_local_structure_is_available:
+    mode = LOCAL
+else:
+    mode = LIMITED</pre>
+
+<div class="warn">
+<strong>注意：</strong>RDKitでparseできたことだけをFULL判定条件にしない。dummy atom、未定義結合、polymer S-group等の有無を追加確認する。
+</div>
+
+<h3>7.4 共通Validation項目</h3>
+<table>
+<thead><tr><th>項目</th><th>内容</th><th>状態</th></tr></thead>
+<tbody>
+<tr><td>Representation</td><td>アプリ内部形式として保存・再表示可能か</td><td>Pass / Fail</td></tr>
+<tr><td>Structure</td><td>構造・結合・原子価等の整合性</td><td>Pass / Warning / Fail / Not evaluable</td></tr>
+<tr><td>Element balance</td><td>反応物・生成物の元素数比較</td><td>Pass / Warning / Not evaluable</td></tr>
+<tr><td>Charge balance</td><td>総formal chargeの比較</td><td>Pass / Warning / Not evaluable</td></tr>
+<tr><td>Atom mapping</td><td>mappingの不足・不整合</td><td>Pass / Warning / Not evaluable</td></tr>
+<tr><td>Bond changes</td><td>生成・切断・結合次数変化の抽出</td><td>Info / Warning / Not evaluable</td></tr>
+</tbody>
+</table>
+
+<h3>7.5 元素収支</h3>
+<ul>
+  <li>ReactantとProductのみ対象とし、Condition componentは除外する。</li>
+  <li>元素ごとの個数と差分を明示する。</li>
+  <li>単なるOK/NGだけでなく、例：「Product側でHが2不足」を表示する。</li>
+  <li>数値係数を反映する。</li>
+  <li>REPEAT_UNITでは初版に限り単一の <code>n</code> を記号的に扱う。</li>
+  <li>全体収支を一意に評価できない場合はFailではなく <strong>Not evaluable</strong> とする。</li>
+</ul>
+
+<h3>7.6 重大度</h3>
+<ul>
+  <li><span class="status-err">Error</span>：保存・再利用に必要な構造表現そのものが成立しない等。</li>
+  <li><span class="status-warn">Warning</span>：元素収支不一致、電荷不一致、mapping不足等。ユーザー判断で登録可。</li>
+  <li><span class="status-ok">Info</span>：評価対象外、未指定、結合変化等の補足。</li>
+</ul>
+
+<h3>7.7 登録判断</h3>
+<ul>
+  <li>Validation後に「修正へ戻る」「この内容で登録」を提示する。</li>
+  <li>Warningを残したまま登録可能。</li>
+  <li>Warning理由欄は表示するが入力必須としない。</li>
+  <li>Validationモードの手動変更は初版では提供しない。</li>
+</ul>
+</section>
+
+<section class="section" id="polymer">
+<h2>8. ポリマー対応</h2>
+
+<h3>8.1 初版の対象</h3>
+<p>単純ホモポリマーを対象とし、SRU等の繰返し単位をアプリ上で保持・描画できることを要求する。</p>
+
+<h3>8.2 化学量論</h3>
+<p>初版で記号係数として扱うのは単一の <code>n</code> のみとする。</p>
+
+<div class="flow">例：
+n A  →  [A]n
+
+または、繰返し単位ベースで
+A  ↔  repeat unit
+の元素関係を評価する。</div>
+
+<h3>8.3 架橋等</h3>
+<p>全ポリマーネットワークを1つの完全な分子として構築することを要求しない。LOCALモードにより、反応部位の局所構造と結合変化を検証する。</p>
+
+<h3>8.4 表現可能性と検証可能性の分離</h3>
+<ul>
+  <li>構造を保存・再描画できること：登録上の基本要件</li>
+  <li>RDKitで完全解釈できること：Validation能力を高める条件</li>
+  <li>元素収支を計算できること：可能な場合のみ実施</li>
+</ul>
+</section>
+
+<section class="section" id="registration">
+<h2>9. 登録・編集・削除</h2>
+
+<h3>9.1 新規登録</h3>
+<ul>
+  <li>EditorまたはImportからReaction Draftを作る。</li>
+  <li>登録直前にValidationを必ず実行する。</li>
+  <li>結果確認後、ユーザーが登録を確定する。</li>
+</ul>
+
+<h3>9.2 重複警告</h3>
+<ul>
+  <li>初版ではReaction SMILESの完全一致のみ検出する。</li>
+  <li>完全一致が見つかった場合はWarningを出すが、登録自体は禁止しない。</li>
+</ul>
+
+<h3>9.3 編集</h3>
+<ul>
+  <li>保存済み反応をEditorへ読み込み、構造・メモ・タグ等を編集できる。</li>
+  <li>更新保存の直前にValidationを再実行する。</li>
+  <li>初版では改訂履歴を保持しない。</li>
+</ul>
+
+<h3>9.4 削除</h3>
+<ul>
+  <li>登録済み反応を削除可能とする。</li>
+  <li>誤操作防止の確認ダイアログを表示する。</li>
+  <li>初版では履歴保持を要求しないため、確定後はDBから削除してよい。</li>
+</ul>
+
+<h3>9.5 再Validation</h3>
+<ul>
+  <li>個別反応を再Validationできる。</li>
+  <li>Library全体を一括再Validationできる。</li>
+  <li>ValidationロジックやRDKit更新後に再評価できる設計とする。</li>
+  <li>最新Validation結果と実行日時を保存する。</li>
+</ul>
+</section>
+
+<section class="section" id="library">
+<h2>10. Library・検索</h2>
+
+<h3>10.1 一覧</h3>
+<p>保存済み反応について、最低限以下を表示する。</p>
+<ul>
+  <li>反応名</li>
+  <li>構造式プレビュー</li>
+  <li>主要タグ</li>
+  <li>Validation coverage / 状態</li>
+  <li>Warning有無</li>
+  <li>更新日時</li>
+</ul>
+
+<h3>10.2 検索条件</h3>
+<ul>
+  <li>試薬名</li>
+  <li>タグ</li>
+  <li>自由記述全文</li>
+  <li>Reactantに特定分子が含まれる</li>
+  <li>Productに特定分子が含まれる</li>
+  <li>Validation状態</li>
+</ul>
+
+<h3>10.3 構造部分検索</h3>
+<div class="decision">
+<strong>初版に含める。</strong>ただしユーザーへ生のSMARTS入力を要求せず、Ketcher等で検索部分構造を描画し、バックエンドでRDKit substructure searchへ変換する。これにより検索構文エラーを避ける。
+</div>
+
+<ul>
+  <li>対象：Reactant / Product / 両方を選択可能。</li>
+  <li>個人利用・小規模Libraryを想定し、初版はSQLite内候補をRDKitで逐次照合する方式でよい。</li>
+  <li>将来件数が増えた場合のみfingerprint index等を検討する。</li>
+</ul>
+</section>
+
+<section class="section" id="external">
+<h2>11. 外部AI・Office連携</h2>
+
+<h3>11.1 AI用コピー</h3>
+<p>1つの固定フォーマットで、以下をまとめてコピーする。</p>
+<ul>
+  <li>Reaction SMILES（生成可能な場合）</li>
+  <li>試薬・触媒・溶媒・添加剤等の情報</li>
+  <li>加工条件・工程の自由記述</li>
+  <li>一般自由記述メモ</li>
+  <li>最新Validation結果とcoverage</li>
+</ul>
+
+<pre>Reaction:
+&lt;Reaction SMILES or representation note&gt;
+
+Reagents / Catalysts / Conditions:
+&lt;text&gt;
+
+Process:
+&lt;text&gt;
+
+Notes:
+&lt;text&gt;
+
+Validation:
+- Coverage: FULL / REPEAT_UNIT / LOCAL / LIMITED
+- Structure: ...
+- Element balance: ...
+- Charge balance: ...
+- Atom mapping: ...
+- Warnings: ...</pre>
+
+<p>Reaction SMILESを生成できないポリマー等では、その旨と利用可能な構造表現情報を明示し、コピー操作自体は可能とする。</p>
+
+<h3>11.2 構造式のコピー</h3>
+<ul>
+  <li>アプリ内で常に構造式・反応式を描画表示する。</li>
+  <li>Word、PowerPoint、Excelへの貼り付けを主用途とする。</li>
+  <li>「構造式をコピー」操作を提供する。</li>
+  <li>実装優先順位は、可能であれば<strong>SVG等のベクター表現</strong>を優先し、互換性確保のためPNG等のラスタ形式へのフォールバックを用意する。</li>
+</ul>
+
+<h3>11.3 外部からの戻し</h3>
+<p>AI等との議論結果から得た反応はReaction SMILESまたはRXNとしてImportし、Editor確認 → Validation → 登録の通常フローに戻す。</p>
+</section>
+
+<section class="section" id="backup">
+<h2>12. バックアップ・復元</h2>
+
+<ul>
+  <li>アプリからSQLite DB全体を1ファイルとしてバックアップできる。</li>
+  <li>バックアップファイルからLibrary全体を復元できる。</li>
+  <li>人間可読なJSON/CSV等へのexportは初版では不要。</li>
+  <li>復元時は現在DBを上書きする前に明示確認する。</li>
+  <li>DBスキーマの将来変更に備え、スキーマバージョン管理の仕組みは内部的に用意する。</li>
+</ul>
+</section>
+
+<section class="section" id="data">
+<h2>13. データモデル</h2>
+
+<h3>13.1 Reaction</h3>
+<table>
+<thead><tr><th>項目</th><th>概要</th></tr></thead>
+<tbody>
+<tr><td>id</td><td>内部ID</td></tr>
+<tr><td>name</td><td>反応名、任意</td></tr>
+<tr><td>reaction_smiles</td><td>生成可能な場合のReaction SMILES</td></tr>
+<tr><td>editor_structure_data</td><td>Ketcherで再編集可能な構造表現。ポリマー情報を保持できる形式を優先</td></tr>
+<tr><td>validation_mode</td><td>FULL / REPEAT_UNIT / LOCAL / LIMITED</td></tr>
+<tr><td>reagents_text</td><td>実務試薬、触媒等の自由記述</td></tr>
+<tr><td>process_text</td><td>加工工程・条件等の自由記述</td></tr>
+<tr><td>notes</td><td>一般自由記述</td></tr>
+<tr><td>warning_reason</td><td>Warningを承知で登録した理由。任意</td></tr>
+<tr><td>created_at</td><td>登録日時</td></tr>
+<tr><td>updated_at</td><td>更新日時</td></tr>
+</tbody>
+</table>
+
+<h3>13.2 Reaction Component</h3>
+<table>
+<thead><tr><th>項目</th><th>概要</th></tr></thead>
+<tbody>
+<tr><td>reaction_id</td><td>所属反応</td></tr>
+<tr><td>role</td><td>REACTANT / PRODUCT / CONDITION</td></tr>
+<tr><td>coefficient</td><td>数値係数または初版では単一n</td></tr>
+<tr><td>structure</td><td>分子・局所構造の保存表現</td></tr>
+<tr><td>canonical_smiles</td><td>生成可能な場合。検索・重複補助に使用</td></tr>
+<tr><td>display_name</td><td>任意の名称</td></tr>
+</tbody>
+</table>
+
+<h3>13.3 Validation Result</h3>
+<ul>
+  <li>reaction_id</li>
+  <li>validation_mode</li>
+  <li>structure_status</li>
+  <li>element_balance_status</li>
+  <li>charge_balance_status</li>
+  <li>mapping_status</li>
+  <li>bond_change_summary</li>
+  <li>element_difference_json</li>
+  <li>warnings_json</li>
+  <li>validator_version</li>
+  <li>validated_at</li>
+</ul>
+
+<h3>13.4 Tags</h3>
+<p><code>tags</code> と <code>reaction_tags</code> の多対多テーブルで管理する。</p>
+
+<div class="note">
+Validation結果は登録時の固定値として扱わず、<code>validator_version</code> と実行日時を持たせ、再Validationで更新できるようにする。
+</div>
+</section>
+
+<section class="section" id="api">
+<h2>14. バックエンド責務・API</h2>
+
+<h3>14.1 chemistry層</h3>
+<ul>
+  <li>Reaction SMILES / RXN parse</li>
+  <li>内部Reaction Draft正規化</li>
+  <li>Validation mode自動判定</li>
+  <li>元素収支計算</li>
+  <li>電荷収支計算</li>
+  <li>原子価・構造整合性チェック</li>
+  <li>atom mapping検証</li>
+  <li>結合変化抽出</li>
+  <li>canonical representation生成</li>
+  <li>構造部分検索</li>
+</ul>
+
+<h3>14.2 API例</h3>
+<pre>POST   /api/reactions/parse
+POST   /api/reactions/validate
+POST   /api/reactions
+GET    /api/reactions
+GET    /api/reactions/{id}
+PUT    /api/reactions/{id}
+DELETE /api/reactions/{id}
+
+POST   /api/reactions/{id}/revalidate
+POST   /api/reactions/revalidate-all
+
+POST   /api/search/substructure
+POST   /api/backup
+POST   /api/restore</pre>
+
+<p class="muted small">実際のURI設計は実装時に調整可能だが、parse・validation・persistenceの責務は分離する。</p>
+</section>
+
+<section class="section" id="ui">
+<h2>15. 画面構成</h2>
+
+<div class="two">
+<div class="mini">
+<h4>Editor</h4>
+<ul>
+  <li>Ketcher</li>
+  <li>成分role</li>
+  <li>係数</li>
+  <li>タグ・自由記述</li>
+  <li>AI用コピー</li>
+  <li>構造式コピー</li>
+  <li>Validationへ進む</li>
+</ul>
+</div>
+
+<div class="mini">
+<h4>Import</h4>
+<ul>
+  <li>Reaction SMILES貼り付け</li>
+  <li>RXN file選択</li>
+  <li>Parse結果</li>
+  <li>構造プレビュー</li>
+  <li>Editorへ読み込み</li>
+</ul>
+</div>
+
+<div class="mini">
+<h4>Validation</h4>
+<ul>
+  <li>Validation coverage</li>
+  <li>各検証結果</li>
+  <li>元素差分表</li>
+  <li>Warning詳細</li>
+  <li>任意のWarning理由</li>
+  <li>修正／登録</li>
+</ul>
+</div>
+
+<div class="mini">
+<h4>Library</h4>
+<ul>
+  <li>一覧・構造式プレビュー</li>
+  <li>検索・タグフィルタ</li>
+  <li>Reactant/Product検索</li>
+  <li>部分構造検索</li>
+  <li>編集・削除・再Validation</li>
+  <li>バックアップ・復元</li>
+</ul>
+</div>
+</div>
+
+<h3>15.1 UI上のValidation表現</h3>
+<p>ユーザーに内部分類を選ばせず、「今回どこまで検証できたか」を明示する。</p>
+
+<pre>Validation coverage
+────────────────────────────
+Local structure validation
+
+✓ Reaction-site structure
+✓ Local valence
+✓ Bond changes
+— Whole-reaction element balance
+— Whole-network atom mapping
+
+⚠ Warning
+  全体構造が有限分子として定義されていないため、
+  全体元素収支は評価していません。</pre>
+</section>
+
+<section class="section" id="quality">
+<h2>16. 品質・テスト要件</h2>
+
+<h3>16.1 自動テスト</h3>
+<ul>
+  <li>chemistry層はpytestで単体テストする。</li>
+  <li>既知の正常反応、元素収支不一致、電荷不一致、未mapping、ポリマー、架橋局所構造等をfixture化する。</li>
+  <li>FastAPI endpointのintegration testを用意する。</li>
+  <li>FrontendはTypeScript typecheckと主要フローのUIテストを実施する。</li>
+</ul>
+
+<h3>16.2 重要エッジケース</h3>
+<ul>
+  <li>explicit H / implicit H</li>
+  <li>formal charge</li>
+  <li>isotope</li>
+  <li>芳香族結合</li>
+  <li>salt / 複数成分</li>
+  <li>condition componentの収支除外</li>
+  <li>dummy atom / wildcard</li>
+  <li>polymer S-group / SRU</li>
+  <li>Reaction SMILESを生成できない保存可能構造</li>
+  <li>単一nを含むrepeat-unit validation</li>
+</ul>
+
+<h3>16.3 AIエージェント開発向けルール</h3>
+<ul>
+  <li>機能追加時に既存testを実行する。</li>
+  <li>Validationの判定条件をUIコードへ重複実装しない。</li>
+  <li>API契約はPydantic/OpenAPIを正とし、Frontend型と同期する。</li>
+  <li>化学的妥当性と機械的Validationを混同しない。</li>
+</ul>
+</section>
+
+<section class="section" id="future">
+<h2>17. 初版対象外・将来拡張</h2>
+
+<span class="tag">BigSMILES</span>
+<span class="tag">複雑な共重合体</span>
+<span class="tag">版管理</span>
+<span class="tag">類似反応検索</span>
+<span class="tag">RXNMapper自動mapping</span>
+<span class="tag">高度な反応分類</span>
+<span class="tag">AI API統合</span>
+<span class="tag">市販試薬マスター</span>
+<span class="tag">温度・圧力等の構造化条件</span>
+
+<ul>
+  <li>BigSMILES等による複雑ポリマー表現</li>
+  <li>ランダム／ブロック共重合体、分岐、複雑ネットワーク</li>
+  <li>複数記号変数を用いた一般的な化学量論</li>
+  <li>反応の改訂履歴・差分表示</li>
+  <li>fingerprint等による類似反応検索</li>
+  <li>atom mapping自動生成・補完</li>
+  <li>AIサービスをアプリ内から直接呼び出す機能</li>
+  <li>市販試薬・メーカー・グレードの正規化管理</li>
+  <li>工程条件の構造化・統計検索</li>
+</ul>
+</section>
+
+<section class="section" id="acceptance">
+<h2>18. 初版受入条件</h2>
+
+<ol>
+  <li>Editorで低分子反応を描画し、反応物・生成物・condition component・係数を設定できる。</li>
+  <li>Reaction SMILESまたはRXNをImportし、Editorで確認・修正できる。</li>
+  <li>Editor/Importの双方が同一Validationフローへ入る。</li>
+  <li>FULL / REPEAT_UNIT / LOCAL / LIMITEDを自動判定できる。</li>
+  <li>低分子反応で元素・電荷収支、構造、atom mapping等を評価できる。</li>
+  <li>単純ホモポリマーで単一nを考慮したrepeat-unit validationができる。</li>
+  <li>架橋等をLOCALとして保存・局所Validationできる。</li>
+  <li>Warningがあってもユーザー判断で登録でき、Warning理由を任意記録できる。</li>
+  <li>反応をLibraryへ保存し、編集・削除・個別再Validation・一括再Validationできる。</li>
+  <li>Reaction SMILES完全一致時に重複Warningを表示できる。</li>
+  <li>試薬名、タグ、自由記述、Reactant/Product、部分構造で検索できる。</li>
+  <li>AI用テキストを1操作でコピーできる。</li>
+  <li>構造式をWord / PowerPoint / Excelへ貼り付け可能な形でコピーできる。</li>
+  <li>SQLite DB全体をアプリからバックアップ・復元できる。</li>
+</ol>
+
+<div class="decision">
+<strong>初版の完成定義：</strong>「構造を入力・Importする → 機械的に検証できる範囲を自動判定する → ユーザーが結果を理解して登録判断する → 後から構造・メモ・Validation結果を検索・再利用できる」という一連のワークフローが成立していること。
+</div>
+</section>
+
+<footer>
+化学反応検証・ライブラリアプリ 仕様書
+</footer>
+
+</div>
+</body>
+</html>
