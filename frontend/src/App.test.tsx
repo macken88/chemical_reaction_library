@@ -1,6 +1,26 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const ketcherMock = vi.hoisted(() => ({
+  getSmiles: vi.fn().mockResolvedValue("CCO>>CC=O"),
+  copyImage: vi.fn().mockResolvedValue("svg"),
+}));
+
+vi.mock("./KetcherEditor", async () => {
+  const React = await import("react");
+  type Props = { value: string; onImport: (value: string) => void; label: string; compact?: boolean };
+  type Handle = { importDrawnStructure: () => Promise<string>; copyImage: () => Promise<"svg" | "png"> };
+  const KetcherEditor = React.forwardRef<Handle, Props>(function MockKetcher({ label, onImport }, ref) {
+    React.useImperativeHandle(ref, () => ({
+      importDrawnStructure: async () => { const value = await ketcherMock.getSmiles(); onImport(value); return value; },
+      copyImage: ketcherMock.copyImage,
+    }));
+    return <div data-testid={`ketcher-${label}`}><button type="button" onClick={() => void ketcherMock.getSmiles().then(onImport)}>描画内容を取り込む</button></div>;
+  });
+  return { KetcherEditor };
+});
+
 import { App } from "./App";
 
 const validation = { validation_mode: "FULL", representation_status: "PASS", structure_status: "WARNING", element_balance_status: "WARNING", charge_balance_status: "PASS", mapping_status: "NOT_EVALUABLE", bond_change_status: "INFO", bond_change_summary: "C–O bond formed", element_difference: { H: "Product side: -2" }, warnings: ["Atom mapping is incomplete"], validator_version: "1", validated_at: "2026-08-14T00:00:00Z" };
@@ -9,7 +29,7 @@ const reaction = { id: 7, name: "テスト反応", reaction_smiles: "CCO>>CC=O",
 function json(body: unknown, status = 200) { return Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } })); }
 
 describe("reaction library workflow", () => {
-  beforeEach(() => { vi.stubGlobal("fetch", vi.fn()); });
+  beforeEach(() => { vi.clearAllMocks(); vi.stubGlobal("fetch", vi.fn()); });
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
   it("shows the empty editor and permits keyboard component editing", async () => {
@@ -51,5 +71,17 @@ describe("reaction library workflow", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "キャンセル" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("imports a drawn substructure before searching its selected target", async () => {
+    const user = userEvent.setup(); vi.mocked(fetch).mockResolvedValueOnce(await json({ items: [], total: 0 })).mockResolvedValueOnce(await json({ items: [reaction], total: 1 })); render(<App />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /Library/ }));
+    await screen.findByText("まだ反応がありません");
+    await user.click(screen.getByText("Ketcher で部分構造を描いて検索する"));
+    await user.click(within(screen.getByTestId("ketcher-部分構造検索")).getByRole("button", { name: "描画内容を取り込む" }));
+    await user.selectOptions(screen.getByLabelText("部分構造検索の対象"), "PRODUCT");
+    await user.click(screen.getByRole("button", { name: "部分構造を検索" }));
+    await waitFor(() => expect(fetch).toHaveBeenLastCalledWith("/api/search/substructure", expect.objectContaining({ method: "POST" })));
+    expect(await screen.findByText("テスト反応")).toBeInTheDocument();
   });
 });

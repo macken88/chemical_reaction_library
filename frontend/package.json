@@ -10,19 +10,22 @@
     "test": "vitest"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "latest",
-    "react": "latest",
-    "react-dom": "latest",
-    "vite": "latest"
+    "@vitejs/plugin-react": "6.0.5",
+    "ketcher-core": "3.14.0",
+    "ketcher-react": "3.14.0",
+    "ketcher-standalone": "3.14.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "vite": "8.2.1"
   },
   "devDependencies": {
-    "@testing-library/jest-dom": "latest",
-    "@testing-library/react": "latest",
-    "@testing-library/user-event": "latest",
-    "@types/react": "latest",
-    "@types/react-dom": "latest",
-    "jsdom": "latest",
-    "typescript": "latest",
-    "vitest": "latest"
+    "@testing-library/jest-dom": "7.0.1",
+    "@testing-library/react": "16.3.2",
+    "@testing-library/user-event": "14.6.4",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "jsdom": "29.0.1",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
   }
 }
