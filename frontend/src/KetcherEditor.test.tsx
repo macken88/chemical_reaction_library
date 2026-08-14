@@ -1,6 +1,6 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({
   getSmiles: vi.fn().mockResolvedValue("CCO>>CC=O"),
@@ -18,7 +18,8 @@ vi.mock("ketcher-standalone", () => ({ StandaloneStructServiceProvider: class {}
 import { KetcherEditor } from "./KetcherEditor";
 
 describe("local Ketcher adapter", () => {
-  afterEach(() => { cleanup(); vi.clearAllMocks(); });
+  beforeEach(() => { vi.spyOn(window, "scrollTo").mockImplementation(() => undefined); });
+  afterEach(() => { cleanup(); vi.clearAllMocks(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
   it("loads Draft structure into Ketcher and imports a drawn reaction explicitly", async () => {
     const imported = vi.fn(); const user = userEvent.setup();
@@ -35,14 +36,9 @@ describe("local Ketcher adapter", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("反応矢印を確認してください");
   });
 
-  it("generates an SVG image preview through the local Ketcher adapter", async () => {
-    const originalUrl = URL.createObjectURL;
-    Object.assign(URL, { createObjectURL: vi.fn().mockReturnValue("blob:preview"), revokeObjectURL: vi.fn() });
-    api.generateImage.mockResolvedValue(new Blob(["<svg />"], { type: "image/svg+xml" }));
-    const { KetcherSvgPreview } = await import("./KetcherEditor");
-    render(<KetcherSvgPreview structure="CCO>>CC=O" alt="reaction preview" />);
-    expect(await screen.findByRole("img", { name: "reaction preview" })).toHaveAttribute("src", "blob:preview");
-    expect(api.generateImage).toHaveBeenCalledWith("CCO>>CC=O", { outputFormat: "svg", backgroundColor: "#f1ebdf" });
-    Object.assign(URL, { createObjectURL: originalUrl });
+  it("restores the viewport after Ketcher initialization so its internal autofocus does not hide the masthead", async () => {
+    const scrollTo = vi.mocked(window.scrollTo); vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 1; }); Object.defineProperty(window, "scrollY", { configurable: true, value: 0 });
+    render(<KetcherEditor label="反応" value="" onImport={vi.fn()} />);
+    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ top: 0, left: 0, behavior: "auto" }));
   });
 });

@@ -29,7 +29,10 @@ function asAdapter(ketcher: Ketcher): KetcherApi {
 export const KetcherEditor = forwardRef<KetcherEditorHandle, KetcherEditorProps>(function KetcherEditor({ value, onImport, label, compact = false }, ref) {
   const provider = useMemo(() => new StandaloneStructServiceProvider(), []);
   const api = useRef<KetcherApi | null>(null);
+  const root = useRef<HTMLElement>(null);
   const lastLoaded = useRef<string | null>(null);
+  const initialScrollY = useRef(typeof window === "undefined" ? 0 : window.scrollY);
+  const restoredInitialFocus = useRef(false);
   const [ready, setReady] = useState(false);
   const [loadError, setLoadError] = useState("");
 
@@ -65,14 +68,25 @@ export const KetcherEditor = forwardRef<KetcherEditorHandle, KetcherEditorProps>
     },
   }));
 
-  return <section className={`ketcher ${compact ? "ketcher--compact" : ""}`} aria-label={`${label} 構造式エディタ`}>
+  function restoreInitialViewport() {
+    if (restoredInitialFocus.current || typeof window === "undefined") return;
+    restoredInitialFocus.current = true;
+    const schedule = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (callback: FrameRequestCallback) => window.setTimeout(() => callback(Date.now()), 0);
+    schedule(() => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && root.current?.contains(active)) active.blur();
+      window.scrollTo({ top: initialScrollY.current, left: window.scrollX, behavior: "auto" });
+    });
+  }
+
+  return <section ref={root} className={`ketcher ${compact ? "ketcher--compact" : ""}`} aria-label={`${label} 構造式エディタ`}>
     <div className="ketcher__bar"><span>構造式エディタ / Ketcher</span><small>{ready ? "ローカル standalone" : "エディタを起動中…"}</small></div>
     <div className="ketcher__canvas">
       <Editor
         staticResourcesUrl="/"
         structServiceProvider={provider}
         errorHandler={(message) => setLoadError(`Ketcher: ${message}`)}
-        onInit={(editor) => { api.current = asAdapter(editor); setReady(true); }}
+        onInit={(editor) => { api.current = asAdapter(editor); setReady(true); restoreInitialViewport(); }}
         disableMacromoleculesEditor={false}
       />
     </div>
@@ -80,28 +94,3 @@ export const KetcherEditor = forwardRef<KetcherEditorHandle, KetcherEditorProps>
     <div className="ketcher__footer"><span>描画内容は明示的に Draft へ取り込みます。</span><button className="quiet" type="button" disabled={!ready} onClick={() => void importDrawnStructure().catch(() => undefined)}>描画内容を取り込む</button></div>
   </section>;
 });
-
-/** A local Ketcher adapter is also used for SVG previews; text is only a failure fallback. */
-export function KetcherSvgPreview({ structure, alt }: { structure: string; alt: string }) {
-  const provider = useMemo(() => new StandaloneStructServiceProvider(), []);
-  const [url, setUrl] = useState("");
-  const [error, setError] = useState("");
-
-  useEffect(() => () => { if (url) URL.revokeObjectURL(url); }, [url]);
-
-  if (!structure) return <span className="reaction-preview__fallback">構造未記入</span>;
-  return <div className="reaction-preview__image">
-    <Editor
-      staticResourcesUrl="/"
-      structServiceProvider={provider}
-      errorHandler={() => setError("構造式プレビューを生成できませんでした。")}
-      onInit={(editor) => {
-        void asAdapter(editor).generateImage(structure, { outputFormat: "svg", backgroundColor: "#f1ebdf" })
-          .then((image) => { setUrl(URL.createObjectURL(image)); setError(""); })
-          .catch(() => setError("構造式プレビューを生成できませんでした。"));
-      }}
-      disableMacromoleculesEditor={false}
-    />
-    {url ? <img src={url} alt={alt} /> : error ? <span className="reaction-preview__fallback">{error}<br />{structure}</span> : <span className="reaction-preview__loading">構造式を描画中…</span>}
-  </div>;
-}

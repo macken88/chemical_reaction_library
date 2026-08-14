@@ -12,7 +12,7 @@ vi.mock("./KetcherEditor", async () => {
     React.useImperativeHandle(ref, () => ({ importDrawnStructure: async () => { const value = await ketcherMock.getSmiles(); await onImport(value); return value; }, copyImage: ketcherMock.copyImage }));
     return <div data-testid={`ketcher-${label}`}><button type="button" onClick={() => void ketcherMock.getSmiles().then(onImport).catch(() => undefined)}>描画内容を取り込む</button></div>;
   });
-  return { KetcherEditor, KetcherSvgPreview: ({ structure }: { structure: string }) => <img alt="mock structure preview" data-structure={structure} /> };
+  return { KetcherEditor };
 });
 
 import { App } from "./App";
@@ -61,9 +61,9 @@ describe("reaction library workflow", () => {
   });
 
   it("displays warnings and reloads the library after registration", async () => {
-    const user = userEvent.setup(); vi.mocked(fetch).mockResolvedValueOnce(await json(validation)).mockResolvedValueOnce(await json(reaction, 201)).mockResolvedValueOnce(await json({ items: [reaction], total: 1 })); render(<App />);
+    const user = userEvent.setup(); const confirm = vi.fn().mockReturnValue(false); vi.stubGlobal("confirm", confirm); vi.mocked(fetch).mockResolvedValueOnce(await json(validation)).mockResolvedValueOnce(await json(reaction, 201)).mockResolvedValueOnce(await json({ items: [reaction], total: 1 })); render(<App />);
     await user.click(screen.getByRole("button", { name: /Validation へ進む/ })); await screen.findByText("Atom mapping is incomplete"); await user.click(screen.getByRole("button", { name: "この内容で登録" }));
-    expect(await screen.findByText("テスト反応")).toBeInTheDocument(); expect(vi.mocked(fetch).mock.calls.at(-1)?.[0]).toBe("/api/reactions");
+    expect(await screen.findByText("テスト反応")).toBeInTheDocument(); expect(vi.mocked(fetch).mock.calls.at(-1)?.[0]).toBe("/api/reactions"); await user.click(screen.getByRole("button", { name: /新規反応/ })); expect(confirm).not.toHaveBeenCalled();
   });
 
   it("sends independent full-text, reagent, and structural search fields as intentional AND conditions", async () => {
@@ -75,6 +75,26 @@ describe("reaction library workflow", () => {
     const init = vi.mocked(fetch).mock.calls[1][1] as RequestInit;
     expect(JSON.parse(init.body as string)).toMatchObject({ query: "酸化", reagent: "Cu", reactant: "CCO" });
     expect(JSON.parse(init.body as string).product).toBeUndefined();
+  });
+
+  it("requires a structural search target instead of silently dropping a SMILES filter", async () => {
+    const user = userEvent.setup(); vi.mocked(fetch).mockResolvedValueOnce(await json({ items: [reaction], total: 1 })); render(<App />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /Library/ })); await screen.findByText("テスト反応");
+    await user.type(screen.getByPlaceholderText("例: CCO"), "CCO"); fireEvent.submit(screen.getByRole("button", { name: "検索" }).closest("form")!);
+    expect(await screen.findByRole("status")).toHaveTextContent("対象を「反応物」または「生成物」から選択"); expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the backend SVG preview and only exposes text after image failure", async () => {
+    const user = userEvent.setup(); vi.mocked(fetch).mockResolvedValueOnce(await json({ items: [reaction], total: 1 })); render(<App />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /Library/ })); const image = await screen.findByRole("img", { name: "テスト反応の構造式プレビュー" });
+    expect(image).toHaveAttribute("loading", "lazy"); expect(image).toHaveAttribute("src", "/api/reactions/7/structure.svg"); fireEvent.error(image);
+    expect(await screen.findByText("構造式プレビューを読み込めませんでした。", { exact: false })).toBeInTheDocument(); expect(screen.queryByRole("img", { name: "テスト反応の構造式プレビュー" })).not.toBeInTheDocument();
+  });
+
+  it("does not warn for an unchanged loaded record but warns after an edit", async () => {
+    const user = userEvent.setup(); const confirm = vi.fn().mockReturnValue(false); vi.stubGlobal("confirm", confirm); vi.mocked(fetch).mockResolvedValueOnce(await json({ items: [reaction], total: 1 })); render(<App />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /Library/ })); await screen.findByText("テスト反応"); await user.click(screen.getByRole("button", { name: "編集" })); await user.click(screen.getByRole("link", { name: /反応台帳/ }));
+    expect(confirm).not.toHaveBeenCalled(); await user.type(screen.getByPlaceholderText("例: 酢酸エチルの加水分解"), "変更"); await user.click(screen.getByRole("link", { name: /反応台帳/ })); expect(confirm).toHaveBeenCalledTimes(1);
   });
 
   it("imports a drawn substructure once before searching its selected target", async () => {
