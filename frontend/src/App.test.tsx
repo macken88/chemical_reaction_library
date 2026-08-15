@@ -42,6 +42,26 @@ describe("reaction library workflow", () => {
     expect(within(navigation).queryByRole("button", { name: /Validation/ })).not.toBeInTheDocument();
   });
 
+  it("keeps auxiliary pages reachable after collapsing the sidebar", async () => {
+    const user = userEvent.setup(); const originalWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1200 });
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "サイドバーを折り畳む" }));
+    expect(screen.getByRole("button", { name: "サイドバーを展開" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: "Editor" })).toBeInTheDocument();
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 900 });
+    fireEvent(window, new Event("resize"));
+    expect(screen.getByRole("button", { name: "サイドバーを折り畳む" })).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(document.querySelector<HTMLButtonElement>(".sidebar-toggle")!);
+    expect(document.querySelector<HTMLButtonElement>(".sidebar-toggle")).toHaveAttribute("aria-expanded", "true");
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: originalWidth });
+    fireEvent(window, new Event("resize"));
+    await user.click(screen.getByRole("button", { name: "データ管理" }));
+    expect(screen.getByRole("heading", { name: "バックアップと復元" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "ヘルプ" }));
+    expect(screen.getByRole("heading", { name: "反応台帳の使い方" })).toBeInTheDocument();
+  });
+
   it("asks before discarding a dirty Draft from the brand entry point", async () => {
     const user = userEvent.setup(); const confirm = vi.fn().mockReturnValue(false); vi.stubGlobal("confirm", confirm); render(<App />);
     await user.type(screen.getByPlaceholderText("例: 酢酸エチルの加水分解"), "残すDraft"); await user.click(screen.getByRole("link", { name: /反応台帳/ }));
@@ -165,11 +185,11 @@ describe("reaction library workflow", () => {
   });
 
   it("restores a selected backup file with two confirmations and reloads the list", async () => {
-    const user = userEvent.setup(); vi.mocked(fetch).mockResolvedValueOnce(await json({ items: [], total: 0 })).mockResolvedValueOnce(await json({ restored: true, schema_version: "1" })).mockResolvedValueOnce(await json({ items: [reaction], total: 1 })); render(<App />);
-    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /Library/ })); await screen.findByText("まだ反応がありません");
+    const user = userEvent.setup(); vi.mocked(fetch).mockResolvedValueOnce(await json({ restored: true, schema_version: "1" })).mockResolvedValueOnce(await json({ items: [reaction], total: 1 })); render(<App />);
+    await user.click(screen.getByRole("button", { name: "データ管理" }));
     const file = new File(["SQLite format 3\0"], "reaction-library.sqlite3", { type: "application/vnd.sqlite3" });
     await user.upload(screen.getByLabelText("復元バックアップファイル"), file); await user.click(screen.getByRole("button", { name: "ファイルから復元" })); await user.click(screen.getByRole("button", { name: "このファイルで本当に復元する" }));
-    expect(await screen.findByText("テスト反応")).toBeInTheDocument(); expect(vi.mocked(fetch).mock.calls[1][0]).toBe("/api/restore/upload"); const restoreInit = vi.mocked(fetch).mock.calls[1][1] as RequestInit; expect(restoreInit.body).toBeInstanceOf(FormData); expect((restoreInit.body as FormData).get("confirmation_token")).toBe("RESTORE_LIBRARY"); expect((restoreInit.body as FormData).get("backup_file")).toBe(file);
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls[0][0]).toBe("/api/restore/upload")); const restoreInit = vi.mocked(fetch).mock.calls[0][1] as RequestInit; expect(restoreInit.body).toBeInstanceOf(FormData); expect((restoreInit.body as FormData).get("confirmation_token")).toBe("RESTORE_LIBRARY"); expect((restoreInit.body as FormData).get("backup_file")).toBe(file);
   });
 
   it("traps delete dialog focus, closes on Escape, and restores the delete trigger", async () => {

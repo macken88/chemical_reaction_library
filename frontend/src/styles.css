@@ -33,6 +33,61 @@ main { min-width:0; padding:35px clamp(22px,5vw,76px) 70px; max-width:1550px; wi
 .library-tools form { grid-template-columns:repeat(6, minmax(0, 1fr)); }
 .library-tools form > .primary { grid-column:span 6; justify-self:end; }
 .search-feedback { margin:0; padding:8px 10px; border-left:3px solid var(--amber); background:#fff3d9; color:#59400c; font-size:.82rem; }
+
+/* The desktop sidebar can collapse without removing any navigation destination. */
+main { padding-left:clamp(12px,1.25vw,19px); }
+.app-shell--sidebar-collapsed { grid-template-columns:72px minmax(0, 1fr); }
+.sidebar__top { display:grid; gap:15px; }
+.sidebar-toggle { width:32px; min-height:32px; margin-left:auto; border:1px solid #7d8c81; color:#faf3e4; background:transparent; font-size:1.05rem; }
+.sidebar__bottom { margin-top:auto; }
+.utility-nav { border-top:1px solid #526058; padding-top:14px; }
+.utility-nav__item { width:100%; border:0; border-left:1px solid transparent; background:transparent; color:#c8d1c8; padding:9px 10px; text-align:left; font-size:.8rem; }
+.utility-nav__item:hover,.utility-nav__item.active { color:#fff8eb; border-left-color:#e59b74; background:linear-gradient(90deg,rgb(155 79 47 /.25),transparent); }
+.sidebar__bottom .sidebar-note { margin-top:16px; }
+.sidebar--collapsed { padding-inline:10px; }
+.sidebar--collapsed .sidebar__top { justify-items:center; }
+.sidebar--collapsed .sidebar-toggle { margin-left:0; }
+.sidebar--collapsed .brand { grid-template-columns:1fr; padding:0; }
+.sidebar--collapsed .brand span { grid-row:auto; }
+.sidebar--collapsed .brand strong,.sidebar--collapsed .brand small,.sidebar--collapsed .nav-item b,.sidebar--collapsed .sidebar-note { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+.sidebar--collapsed .nav-item { grid-template-columns:1fr; justify-items:center; padding-inline:4px; }
+.sidebar--collapsed .utility-nav__item { height:34px; padding:0; font-size:0; text-align:center; }
+.sidebar--collapsed .utility-nav__item::before { color:#dde1da; font-size:1rem; }
+.sidebar--collapsed .utility-nav__item:first-child::before { content:"▣"; }
+.sidebar--collapsed .utility-nav__item:last-child::before { content:"?"; }
+
+/* The corner handle changes both dimensions while the Ketcher frame itself remains bounded. */
+.ketcher__viewport { width:100%; max-width:100%; overflow-x:auto; overflow-y:visible; padding-bottom:2px; }
+.ketcher__resizable { position:relative; min-width:320px; max-width:none; }
+.ketcher__canvas { width:100%; max-width:none; }
+.ketcher__resize-handle { position:absolute; right:0; bottom:0; z-index:1; width:28px; height:28px; border:1px solid var(--line-deep); border-radius:2px 0 0; color:var(--copper-dark); background:#f8f3e9; cursor:nwse-resize; touch-action:none; }
+.ketcher__resize-handle:focus-visible { outline:3px solid #275e68; outline-offset:-4px; }
+.management-page,.help-page { display:grid; gap:20px; max-width:900px; animation:entry .42s both; }
+.management-card { padding:clamp(18px,3vw,35px); border:1px solid var(--line); background:rgb(255 253 247 / .78); box-shadow:var(--shadow); }
+.management-card > p { color:var(--muted); }
+.management-actions { display:grid; gap:18px; align-items:start; }
+
+@media (max-width:950px) {
+  .sidebar .sidebar-toggle { display:none; }
+  .app-shell--sidebar-collapsed { grid-template-columns:1fr; }
+  .sidebar--collapsed { padding:15px 20px; }
+  .sidebar--collapsed .sidebar__top { display:block; }
+  .sidebar--collapsed .sidebar-toggle { display:none; }
+  .sidebar--collapsed .brand { display:grid; grid-template-columns:42px 1fr; padding:15px 20px; }
+  .sidebar--collapsed .brand span { grid-row:span 2; }
+  .sidebar--collapsed .brand strong,.sidebar--collapsed .brand small,.sidebar--collapsed .nav-item b,.sidebar--collapsed .sidebar-note { position:static; width:auto; height:auto; padding:initial; margin:initial; overflow:visible; clip:auto; white-space:normal; border:initial; }
+  .sidebar--collapsed .nav-item { display:block; padding:8px; }
+  .sidebar--collapsed .utility-nav { display:grid; grid-template-columns:repeat(2,1fr); }
+  .sidebar--collapsed .utility-nav__item { height:auto; padding:8px; font-size:.8rem; text-align:left; }
+  .sidebar--collapsed .utility-nav__item::before { content:none; }
+  .sidebar__bottom { margin-top:16px; }
+  .utility-nav { grid-template-columns:repeat(2,1fr); }
+  .sidebar__bottom .sidebar-note { display:none; }
+}
+
+@media (max-width:620px) {
+  .ketcher__resize-handle { width:32px; height:32px; }
+}
 img.reaction-preview__image { display:block; position:relative; z-index:1; width:100%; max-width:100%; max-height:130px; min-height:112px; object-fit:contain; }
 
 /* UI typography is intentionally unified; monospace remains limited to structural data. */

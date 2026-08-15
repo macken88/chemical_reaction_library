@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -40,5 +40,24 @@ describe("local Ketcher adapter", () => {
     const scrollTo = vi.mocked(window.scrollTo); vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 1; }); Object.defineProperty(window, "scrollY", { configurable: true, value: 0 });
     render(<KetcherEditor label="反応" value="" onImport={vi.fn()} />);
     await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ top: 0, left: 0, behavior: "auto" }));
+  });
+
+  it("visibly resizes the Ketcher drawing area in both directions from the corner handle", () => {
+    render(<KetcherEditor label="反応" value="" onImport={vi.fn()} />);
+    const editor = screen.getByLabelText("反応 構造式エディタ");
+    Object.defineProperty(editor, "clientWidth", { configurable: true, value: 1400 });
+    const handle = screen.getByRole("button", { name: /描画領域をリサイズ/ });
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+    const widened = screen.getByRole("button", { name: "反応 の描画領域をリサイズ（幅 920px、高さ 420px）" });
+    expect(widened.parentElement).toHaveStyle({ width: "920px" });
+    fireEvent.keyDown(widened, { key: "ArrowDown" });
+    const keyboardResized = screen.getByRole("button", { name: "反応 の描画領域をリサイズ（幅 920px、高さ 440px）" });
+    expect(keyboardResized.parentElement).toHaveStyle({ width: "920px" });
+    fireEvent.pointerDown(keyboardResized, { pointerId: 1, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(keyboardResized, { pointerId: 1, clientX: 70, clientY: 70 });
+    fireEvent.pointerUp(keyboardResized, { pointerId: 1, clientX: 70, clientY: 70 });
+    const dragResized = screen.getByRole("button", { name: "反応 の描画領域をリサイズ（幅 980px、高さ 500px）" });
+    expect(dragResized.parentElement).toHaveStyle({ width: "980px" });
+    expect(screen.getByText(/左右キーで幅、上下キーで高さ/)).toBeInTheDocument();
   });
 });

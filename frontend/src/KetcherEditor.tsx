@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
 import { Editor } from "ketcher-react";
 import "ketcher-react/dist/index.css";
 import { StandaloneStructServiceProvider } from "ketcher-standalone";
@@ -33,8 +33,19 @@ export const KetcherEditor = forwardRef<KetcherEditorHandle, KetcherEditorProps>
   const lastLoaded = useRef<string | null>(null);
   const initialScrollY = useRef(typeof window === "undefined" ? 0 : window.scrollY);
   const restoredInitialFocus = useRef(false);
+  const resizeStart = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
   const [ready, setReady] = useState(false);
   const [loadError, setLoadError] = useState("");
+  const [size, setSize] = useState(() => ({ width: compact ? 720 : 900, height: compact ? 330 : 420 }));
+
+  const clampSize = (width: number, height: number) => {
+    return { width: Math.min(Math.max(320, width), 1600), height: Math.min(Math.max(240, height), 900) };
+  };
+
+  useEffect(() => {
+    // Ketcher observes its host in current versions; the event also covers older embeds.
+    window.dispatchEvent(new Event("resize"));
+  }, [size]);
 
   useEffect(() => {
     if (!api.current || !value || lastLoaded.current === value) return;
@@ -79,17 +90,50 @@ export const KetcherEditor = forwardRef<KetcherEditorHandle, KetcherEditorProps>
     });
   }
 
+  function startResize(event: PointerEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    if ("setPointerCapture" in event.currentTarget) event.currentTarget.setPointerCapture(event.pointerId);
+    resizeStart.current = { x: event.clientX, y: event.clientY, ...size };
+  }
+
+  function resizeFromPointer(event: PointerEvent<HTMLButtonElement>) {
+    if (!resizeStart.current) return;
+    const start = resizeStart.current;
+    setSize(clampSize(start.width + event.clientX - start.x, start.height + event.clientY - start.y));
+  }
+
+  function stopResize(event: PointerEvent<HTMLButtonElement>) {
+    resizeStart.current = null;
+    if ("hasPointerCapture" in event.currentTarget && event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  }
+
+  function resizeFromKeyboard(event: KeyboardEvent<HTMLButtonElement>) {
+    const step = event.shiftKey ? 40 : 20;
+    const change = event.key === "ArrowLeft" ? [-step, 0] : event.key === "ArrowRight" ? [step, 0] : event.key === "ArrowUp" ? [0, -step] : event.key === "ArrowDown" ? [0, step] : null;
+    if (!change) return;
+    event.preventDefault();
+    setSize((current) => clampSize(current.width + change[0], current.height + change[1]));
+  }
+
   return <section ref={root} className={`ketcher ${compact ? "ketcher--compact" : ""}`} aria-label={`${label} 構造式エディタ`}>
-    <div className="ketcher__bar"><span>構造式エディタ / Ketcher</span><small>{ready ? "ローカル standalone" : "エディタを起動中…"}</small></div>
-    <div className="ketcher__canvas">
-      <Editor
-        staticResourcesUrl="/"
-        structServiceProvider={provider}
-        errorHandler={(message) => setLoadError(`Ketcher: ${message}`)}
-        onInit={(editor) => { api.current = asAdapter(editor); setReady(true); restoreInitialViewport(); }}
-        disableMacromoleculesEditor={false}
-      />
+    <div className="ketcher__viewport">
+      <div className="ketcher__resizable" style={{ width: `${size.width}px` } as CSSProperties}>
+        <div className="ketcher__bar"><span>構造式エディタ / Ketcher</span><small>{ready ? "ローカル standalone" : "エディタを起動中…"}</small></div>
+        <div className="ketcher__canvas" style={{ height: size.height }}>
+          <Editor
+            staticResourcesUrl="/"
+            structServiceProvider={provider}
+            errorHandler={(message) => setLoadError(`Ketcher: ${message}`)}
+            onInit={(editor) => { api.current = asAdapter(editor); setReady(true); restoreInitialViewport(); }}
+            disableMacromoleculesEditor={false}
+          />
+        </div>
+        <button className="ketcher__resize-handle" type="button" aria-label={`${label} の描画領域をリサイズ（幅 ${size.width}px、高さ ${size.height}px）`} aria-describedby={`ketcher-resize-help-${label}`} onPointerDown={startResize} onPointerMove={resizeFromPointer} onPointerUp={stopResize} onPointerCancel={stopResize} onKeyDown={resizeFromKeyboard}>
+          <span aria-hidden="true">↘</span>
+        </button>
+      </div>
     </div>
+    <p className="sr-only" id={`ketcher-resize-help-${label}`}>右下のハンドルをドラッグして幅と高さを調整できます。キーボードでは左右キーで幅、上下キーで高さを調整します。Shift キーで調整幅を大きくできます。</p>
     {loadError && <p className="ketcher__error" role="status" aria-live="polite">{loadError}</p>}
     <div className="ketcher__footer"><span>描画内容は明示的に Draft へ取り込みます。</span><button className="quiet" type="button" disabled={!ready} onClick={() => void importDrawnStructure().catch(() => undefined)}>描画内容を取り込む</button></div>
   </section>;
