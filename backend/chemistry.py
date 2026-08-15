@@ -11,7 +11,7 @@ from rdkit import Chem
 from rdkit.Chem import rdChemReactions
 from rdkit.Chem.Draw import rdMolDraw2D
 
-from backend.schemas import CheckStatus, ComponentDraft, ComponentRole, ParseResponse, ReactionDraft, ValidationMode, ValidationResponse
+from backend.schemas import CheckStatus, ComponentDraft, ComponentRole, ParseResponse, ReactionDraft, ReactionImportRequest, ValidationMode, ValidationResponse
 
 VALIDATOR_VERSION = "1.1"
 SCOPE_NOTE = "Mechanical validation checks only representational consistency; it does not guarantee that a reaction is chemically feasible."
@@ -77,6 +77,27 @@ def parse_reaction(content: str, input_format: str = "auto") -> ParseResponse:
         return _parse_rxn(stripped)
     components = parse_reaction_components(stripped)
     return ParseResponse(draft=ReactionDraft(editor_structure_data=stripped, components=components))
+
+
+def parse_reaction_import(request: ReactionImportRequest) -> ParseResponse:
+    """Parse only the declared structure, then apply non-derived import metadata.
+
+    Components, canonical Reaction SMILES, and editor data are deliberately
+    derived by the existing parser rather than accepted from external JSON.
+    """
+    parsed = parse_reaction(request.structure.value, request.structure.format.value)
+    draft_data = parsed.draft.model_dump()
+    draft_data.update(
+        name=request.name,
+        tags=request.tags,
+        reagents_text=request.reagents_text,
+        process_text=request.process_text,
+        notes=request.notes,
+    )
+    return ParseResponse(
+        draft=ReactionDraft(**draft_data),
+        parse_warnings=parsed.parse_warnings,
+    )
 
 
 def _parse_rxn(text: str) -> ParseResponse:

@@ -68,17 +68,45 @@ describe("reaction library workflow", () => {
     expect(confirm).toHaveBeenCalled(); expect(screen.getByDisplayValue("残すDraft")).toBeInTheDocument();
   });
 
-  it("keeps import source visible after a parse error", async () => {
+  it("keeps JSON source visible after a syntax error", async () => {
     const user = userEvent.setup(); vi.mocked(fetch).mockResolvedValueOnce(await json({ detail: "invalid RXN" }, 422)); render(<App />);
     await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /Import/ }));
-    const source = screen.getByLabelText("原文"); await user.type(source, "not a reaction"); await user.click(screen.getByRole("button", { name: /Draft に変換する/ }));
-    expect(await screen.findByText(/形式を解釈できませんでした/)).toBeInTheDocument(); expect(source).toHaveValue("not a reaction");
+    const source = screen.getByLabelText("JSON 原文"); fireEvent.change(source, { target: { value: "{not json" } }); await user.click(screen.getByRole("button", { name: "Draftを作成してEditorで確認" }));
+    expect(await screen.findByText(/JSON の構文エラー/)).toBeInTheDocument(); expect(source).toHaveValue("{not json"); expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("inserts a JSON sample and reports server-side contract errors without losing it", async () => {
+    const user = userEvent.setup(); vi.mocked(fetch).mockResolvedValueOnce(await json({ detail: "Extra inputs are not permitted" }, 422)); render(<App />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /Import/ }));
+    await user.click(screen.getByRole("button", { name: "サンプルを挿入" }));
+    const source = screen.getByLabelText("JSON 原文") as HTMLTextAreaElement; expect(source.value).toContain('"schema_version": 1');
+    await user.click(screen.getByRole("button", { name: "Draftを作成してEditorで確認" }));
+    expect(await screen.findByText(/JSON の契約エラー/)).toBeInTheDocument(); expect(source.value).toContain('"structure"');
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith("/api/reactions/import-json", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("labels a parsed JSON structure failure separately from a contract failure", async () => {
+    const user = userEvent.setup(); vi.mocked(fetch).mockResolvedValueOnce(await json({ detail: "structure is invalid: Reaction SMILES must contain reactants>agents>products" }, 422)); render(<App />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /Import/ }));
+    await user.click(screen.getByRole("button", { name: "サンプルを挿入" })); await user.click(screen.getByRole("button", { name: "Draftを作成してEditorで確認" }));
+    expect(await screen.findByText(/JSON の構造エラー/)).toBeInTheDocument();
   });
 
   it("treats an imported but unsaved Draft as dirty before replacing it", async () => {
     const user = userEvent.setup(); const confirm = vi.fn().mockReturnValue(false); vi.stubGlobal("confirm", confirm); vi.mocked(fetch).mockResolvedValueOnce(await json({ draft: parsed })); render(<App />);
-    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /Import/ })); await user.type(screen.getByLabelText("原文"), "CCO>>CC=O"); await user.click(screen.getByRole("button", { name: /Draft に変換する/ }));
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /Import/ })); fireEvent.change(screen.getByLabelText("JSON 原文"), { target: { value: '{"schema_version":1,"structure":{"format":"reaction_smiles","value":"CCO>>CC=O"},"name":"テスト反応","tags":[],"reagents_text":"","process_text":"","notes":""}' } }); await user.click(screen.getByRole("button", { name: "Draftを作成してEditorで確認" }));
     expect(await screen.findByDisplayValue("テスト反応")).toBeInTheDocument(); await user.click(screen.getByRole("link", { name: /反応台帳/ })); expect(confirm).toHaveBeenCalledTimes(1); expect(screen.getByDisplayValue("テスト反応")).toBeInTheDocument();
+  });
+
+  it("keeps the RXN file import path available", async () => {
+    const user = userEvent.setup(); vi.mocked(fetch).mockResolvedValueOnce(await json({ draft: parsed })); render(<App />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /Import/ }));
+    await user.click(screen.getByLabelText("RXN ファイル", { exact: true }));
+    await user.type(screen.getByLabelText("RXN 原文"), "$RXN\nexample");
+    await user.click(screen.getByRole("button", { name: "Draftを作成してEditorで確認" }));
+    await screen.findByDisplayValue("テスト反応");
+    const request = vi.mocked(fetch).mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(request.body as string)).toEqual({ content: "$RXN\nexample", format: "rxn" });
   });
 
   it("normalizes a Ketcher reaction through parse before validation while retaining metadata", async () => {

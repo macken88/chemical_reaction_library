@@ -3,9 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator, model_validator
 
 
 class ComponentRole(StrEnum):
@@ -27,6 +27,42 @@ class CheckStatus(StrEnum):
     FAIL = "FAIL"
     NOT_EVALUABLE = "NOT_EVALUABLE"
     INFO = "INFO"
+
+
+class ImportedStructureFormat(StrEnum):
+    REACTION_SMILES = "reaction_smiles"
+    RXN = "rxn"
+
+
+class ImportedStructure(BaseModel):
+    """The sole structural source accepted by the JSON import boundary."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    format: ImportedStructureFormat
+    value: StrictStr = Field(min_length=1, max_length=1_000_000)
+
+
+class ReactionImportRequest(BaseModel):
+    """Versioned, strict JSON import contract; derived fields are intentionally absent."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1]
+    structure: ImportedStructure
+    name: StrictStr = Field(max_length=300)
+    tags: list[StrictStr] = Field(max_length=100)
+    reagents_text: StrictStr = Field(max_length=50_000)
+    process_text: StrictStr = Field(max_length=50_000)
+    notes: StrictStr = Field(max_length=50_000)
+
+    @field_validator("tags")
+    @classmethod
+    def validate_import_tags(cls, tags: list[str]) -> list[str]:
+        for tag in tags:
+            if not tag.strip() or len(tag.strip()) > 100:
+                raise ValueError("tag must contain 1-100 characters")
+        return tags
 
 
 class ComponentDraft(BaseModel):

@@ -55,6 +55,46 @@ def test_crud_validate_search_revalidate_and_ai_copy(tmp_path: Path) -> None:
         assert client.get("/api/reactions").json()["total"] == 0
 
 
+def test_json_import_uses_only_declared_structure_and_rejects_invalid_contracts(tmp_path: Path) -> None:
+    app = create_app(f"sqlite:///{tmp_path / 'library.sqlite3'}")
+    source = {
+        "schema_version": 1,
+        "structure": {"format": "reaction_smiles", "value": "CCO>>CC=O"},
+        "name": "ethanol oxidation",
+        "tags": ["oxidation", " example "],
+        "reagents_text": "Cu",
+        "process_text": "ambient",
+        "notes": "Imported as a draft",
+    }
+    with TestClient(app) as client:
+        imported = client.post("/api/reactions/import-json", json=source)
+        assert imported.status_code == 200, imported.text
+        draft = imported.json()["draft"]
+        assert draft["reaction_smiles"] == "CCO>>CC=O"
+        assert draft["name"] == "ethanol oxidation"
+        assert draft["tags"] == ["oxidation", "example"]
+        assert draft["reagents_text"] == "Cu"
+        assert [component["role"] for component in draft["components"]] == ["REACTANT", "PRODUCT"]
+
+        for invalid in (
+            {**source, "components": []},
+            {**source, "structure": {**source["structure"], "components": []}},
+            {**source, "schema_version": 2},
+            {**source, "structure": {"format": "unknown", "value": "CCO>>CC=O"}},
+            {**source, "name": 12},
+        ):
+            rejected = client.post("/api/reactions/import-json", json=invalid)
+            assert rejected.status_code == 422
+
+        malformed_structure = client.post("/api/reactions/import-json", json={**source, "structure": {"format": "reaction_smiles", "value": "not-a-reaction"}})
+        assert malformed_structure.status_code == 422
+        assert "Reaction SMILES" in malformed_structure.json()["detail"]
+
+    schema = app.openapi()["components"]["schemas"]
+    assert schema["ReactionImportRequest"]["additionalProperties"] is False
+    assert schema["ImportedStructure"]["additionalProperties"] is False
+
+
 def test_backup_restore_requires_confirmation_and_restores_whole_database(tmp_path: Path) -> None:
     app = create_app(f"sqlite:///{tmp_path / 'library.sqlite3'}")
     with TestClient(app) as client:

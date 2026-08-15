@@ -14,7 +14,7 @@ from starlette.concurrency import run_in_threadpool
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from backend.chemistry import canonical_smiles, component_matches_substructure, is_valid_substructure_query, parse_reaction, reaction_svg, validate_draft
+from backend.chemistry import canonical_smiles, component_matches_substructure, is_valid_substructure_query, parse_reaction, parse_reaction_import, reaction_svg, validate_draft
 from backend.db import Database, SCHEMA_REVISION, SCHEMA_VERSION, SchemaContractError, validate_sqlite_schema
 from backend.models import Component, Reaction, SchemaMetadata, Tag, ValidationResult
 from backend.schemas import (
@@ -24,6 +24,7 @@ from backend.schemas import (
     ComponentDraft,
     ParseRequest,
     ParseResponse,
+    ReactionImportRequest,
     ReactionDraft,
     ReactionListResponse,
     ReactionResponse,
@@ -214,6 +215,13 @@ def create_app(database_url: str | None = None, *, initialize: bool = True) -> F
             return parse_reaction(request.content, request.format)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/api/reactions/import-json", response_model=ParseResponse)
+    def import_json(request: ReactionImportRequest) -> ParseResponse:
+        try:
+            return parse_reaction_import(request)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"structure is invalid: {exc}") from exc
 
     @app.post("/api/reactions/validate", response_model=ValidationResponse)
     def validate(draft: ReactionDraft, session: Session = Depends(get_session)) -> ValidationResponse:

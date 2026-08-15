@@ -22,6 +22,19 @@ export interface ReactionDraft {
   warning_reason: string;
 }
 
+export type ImportedStructureFormat = "reaction_smiles" | "rxn";
+
+/** Mirrors the strict, versioned Pydantic contract for /reactions/import-json. */
+export interface ReactionImportRequest {
+  schema_version: 1;
+  structure: { format: ImportedStructureFormat; value: string };
+  name: string;
+  tags: string[];
+  reagents_text: string;
+  process_text: string;
+  notes: string;
+}
+
 export interface ValidationResult {
   validation_mode: ValidationMode;
   representation_status: Status;
@@ -81,6 +94,7 @@ const json = (method: string, body?: unknown): RequestInit => ({ method, body: b
 
 export const api = {
   parse: async (content: string, format: "reaction_smiles" | "rxn") => (await request<{ draft: ReactionDraft }>("/reactions/parse", json("POST", { content, format }))).draft,
+  importJson: async (source: ReactionImportRequest) => (await request<{ draft: ReactionDraft }>("/reactions/import-json", json("POST", source))).draft,
   validate: (draft: ReactionDraft) => request<ValidationResult>("/reactions/validate", json("POST", draft)),
   create: (draft: ReactionDraft) => request<Reaction>("/reactions", json("POST", draft)),
   update: (id: number, draft: ReactionDraft) => request<Reaction>(`/reactions/${id}`, json("PUT", draft)),

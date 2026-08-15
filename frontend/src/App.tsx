@@ -1,5 +1,5 @@
 import { ChangeEvent, FormEvent, useEffect, useRef, useState, type RefObject, type SetStateAction } from "react";
-import { api, ApiError, emptyDraft, type ComponentDraft, type Reaction, type ReactionDraft, type SearchFilters, type Status, type ValidationResult } from "./api";
+import { api, ApiError, emptyDraft, type ComponentDraft, type Reaction, type ReactionDraft, type ReactionImportRequest, type SearchFilters, type Status, type ValidationResult } from "./api";
 import { KetcherEditor, type KetcherEditorHandle } from "./KetcherEditor";
 
 type View = "editor" | "import" | "validation" | "library" | "data-management" | "help";
@@ -92,11 +92,39 @@ function Editor({ draft, validation, update, onValidate, onCopy, onAiCopy, onKet
   return <div className="editor-layout"><section className="editor-paper"><div className="section-title"><div><p className="eyebrow">Reaction draft</p><h2>構造と条件</h2></div><div className="utility-actions"><button className="quiet" onClick={() => void onCopy()}>構造式をコピー</button><button className="quiet" onClick={() => void onAiCopy()}>AI用コピー</button></div></div><label className="title-field">反応名 <input value={draft.name} onChange={(event) => update("name", event.target.value)} placeholder="例: 酢酸エチルの加水分解" /></label><KetcherEditor ref={editorRef} label="反応" value={draft.editor_structure_data || draft.reaction_smiles} onImport={onKetcherImport} /><p className="ketcher-boundary">取り込むと Ketcher の反応構造を正として成分台帳を置換します。反応名・タグ・メモ・工程記録は保持されます。</p><label>Reaction SMILES <input value={draft.reaction_smiles} onChange={(event) => update("reaction_smiles", event.target.value)} placeholder="例: CC(=O)OCC.O&gt;&gt;CC(=O)O" /></label><ComponentRows components={draft.components} setComponents={(components) => update("components", components)} /></section><aside className="metadata-panel"><p className="eyebrow">Annotations</p><h2>実務メモ</h2><p className={validation ? "validation-state validation-state--ready" : "validation-state"} role="status">{validation ? "現在のDraftは検証済みです。登録前に結果を確認できます。" : "現在のDraftは未検証です。変更後は再検証が必要です。"}</p><label>タグ（カンマ区切り）<input value={draft.tags.join(", ")} onChange={(event) => update("tags", event.target.value.split(",").map((tag) => tag.trim()).filter(Boolean))} placeholder="例: エステル, 加水分解" /></label><label>試薬・触媒・溶媒<textarea value={draft.reagents_text} onChange={(event) => update("reagents_text", event.target.value)} /></label><label>加工工程・条件<textarea value={draft.process_text} onChange={(event) => update("process_text", event.target.value)} /></label><label>一般メモ<textarea value={draft.notes} onChange={(event) => update("notes", event.target.value)} /></label><button className="primary full" disabled={busy} onClick={() => void onValidate()}>{busy ? "検証中…" : "検証して登録へ →"}</button></aside></div>;
 }
 
+const JSON_IMPORT_SAMPLE: ReactionImportRequest = {
+  schema_version: 1,
+  structure: { format: "reaction_smiles", value: "CC(=O)O.CCO>>CC(=O)OCC.O" },
+  name: "酢酸エチルの合成",
+  tags: ["エステル化", "例"],
+  reagents_text: "硫酸触媒",
+  process_text: "加熱還流",
+  notes: "構造と実験記録は Editor で確認する",
+};
+
 function Import({ onImported, report }: { onImported: (draft: ReactionDraft) => void; report: (message: string) => void }) {
-  const [source, setSource] = useState(""); const [format, setFormat] = useState<"reaction_smiles" | "rxn">("reaction_smiles"); const [busy, setBusy] = useState(false);
-  async function parse(event: FormEvent) { event.preventDefault(); if (!source.trim()) { report("Reaction SMILES または RXN の原文を入力してください。"); return; } setBusy(true); try { onImported(await api.parse(source, format)); report("取り込みました。Editor で構造とメモを確認してから検証してください。"); } catch (error) { report(`形式を解釈できませんでした。原文は保持しています。${messageFor(error)}`); } finally { setBusy(false); } }
-  function fileSelected(event: ChangeEvent<HTMLInputElement>) { const file = event.target.files?.[0]; if (!file) return; void file.text().then((text) => { setSource(text); setFormat("rxn"); }); }
-  return <section className="import-paper"><p className="eyebrow">Import station</p><h2>外部の反応表現を Draft に変換</h2><p>ここでは保存しません。変換後は必ず Editor で確認・修正し、共通 Validation を通します。</p><form onSubmit={(event) => void parse(event)}><fieldset><legend>入力形式</legend><label><input type="radio" checked={format === "reaction_smiles"} onChange={() => setFormat("reaction_smiles")} /> Reaction SMILES</label><label><input type="radio" checked={format === "rxn"} onChange={() => setFormat("rxn")} /> RXN file</label><input aria-label="RXN ファイルを選択" type="file" accept=".rxn,text/plain" onChange={fileSelected} /></fieldset><label>原文<textarea value={source} onChange={(event) => setSource(event.target.value)} placeholder="Reaction SMILES または RXN の内容を貼り付けます。失敗しても原文はこの欄に残ります。" /></label><button className="primary" disabled={busy}>{busy ? "変換中…" : "Draft に変換する →"}</button></form></section>;
+  const [mode, setMode] = useState<"json" | "rxn">("json"); const [jsonSource, setJsonSource] = useState(""); const [rxnSource, setRxnSource] = useState(""); const [busy, setBusy] = useState(false);
+  async function createDraft(event: FormEvent) {
+    event.preventDefault();
+    const source = mode === "json" ? jsonSource : rxnSource;
+    if (!source.trim()) { report(mode === "json" ? "JSON 原文を入力してください。" : "RXN ファイルの内容を入力または選択してください。"); return; }
+    setBusy(true);
+    try {
+      if (mode === "json") {
+        let parsed: unknown;
+        try { parsed = JSON.parse(source); } catch (error) { report(`JSON の構文エラーです。原文は保持しています。${messageFor(error)}`); return; }
+        onImported(await api.importJson(parsed as ReactionImportRequest));
+      } else {
+        onImported(await api.parse(source, "rxn"));
+      }
+      report("Draft を作成しました。Editor で構造とメモを確認してから Validation を実行してください。");
+    } catch (error) {
+      const jsonCategory = error instanceof ApiError && error.message.startsWith("structure is invalid:") ? "構造" : "契約";
+      report(`${mode === "json" ? `JSON の${jsonCategory}` : "RXN の構造"}エラーです。原文は保持しています。${messageFor(error)}`);
+    } finally { setBusy(false); }
+  }
+  function fileSelected(event: ChangeEvent<HTMLInputElement>) { const file = event.target.files?.[0]; if (!file) return; void file.text().then((text) => { setRxnSource(text); setMode("rxn"); }); }
+  return <section className="import-paper"><p className="eyebrow">Import station</p><h2>外部の反応記録を Draft に変換</h2><p>ここでは保存しません。構造はサーバーで読み取り、変換後は必ず Editor と Validation で確認します。</p><form onSubmit={(event) => void createDraft(event)}><fieldset><legend>入力方法</legend><label><input type="radio" checked={mode === "json"} onChange={() => setMode("json")} /> JSON 一括入力</label><label><input type="radio" checked={mode === "rxn"} onChange={() => setMode("rxn")} /> RXN ファイル</label></fieldset>{mode === "json" ? <><div className="import-actions"><p>構造は <code>structure</code> だけで指定します。components や reaction_smiles などの導出値は受け付けません。</p><button type="button" className="quiet" onClick={() => setJsonSource(JSON.stringify(JSON_IMPORT_SAMPLE, null, 2))}>サンプルを挿入</button></div><label>JSON 原文<textarea value={jsonSource} onChange={(event) => setJsonSource(event.target.value)} placeholder="schema_version と structure を含む JSON を貼り付けます。失敗しても原文はこの欄に残ります。" /></label></> : <><label>RXN ファイルを選択<input aria-label="RXN ファイルを選択" type="file" accept=".rxn,text/plain" onChange={fileSelected} /></label><label>RXN 原文<textarea value={rxnSource} onChange={(event) => setRxnSource(event.target.value)} placeholder="RXN ファイルの内容を貼り付けます。失敗しても原文はこの欄に残ります。" /></label></>}<button className="primary" disabled={busy}>{busy ? "Draft を作成中…" : "Draftを作成してEditorで確認"}</button></form></section>;
 }
 
 function EmptyValidation({ onBack }: { onBack: () => void }) { return <section className="empty-state"><p className="eyebrow">No validation yet</p><h2>まず構造を検証します</h2><p>Editor または Import から Draft を準備してください。</p><button className="primary" onClick={onBack}>Editor へ戻る</button></section>; }
