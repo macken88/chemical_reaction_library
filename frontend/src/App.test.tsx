@@ -204,6 +204,43 @@ describe("reaction library workflow", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("対象を「反応物」または「生成物」から選択"); expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  it("opens a read-only reaction detail from the keyboard-accessible Detail button and shows every stored field", async () => {
+    const user = userEvent.setup(); const detailedReaction = { ...reaction, components: [...reaction.components, { role: "CONDITION" as const, coefficient: "2", structure: "O", canonical_smiles: "O", display_name: "water" }], warning_reason: "収支の確認が必要" };
+    vi.mocked(fetch).mockResolvedValueOnce(await json({ items: [detailedReaction], total: 1 })); render(<App />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /Library/ })); await screen.findByText("テスト反応");
+    const detail = screen.getByRole("button", { name: "詳細" }); detail.focus(); await user.keyboard("{Enter}");
+    expect(screen.getByRole("heading", { name: "反応の詳細" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "テスト反応の構造式プレビュー" })).toHaveAttribute("src", "/api/reactions/7/structure.svg");
+    expect(screen.getAllByText("CCO>>CC=O")).toHaveLength(2); expect(screen.getAllByText("条件成分")).toHaveLength(2); expect(screen.getAllByText("Canonical SMILES")).toHaveLength(3); expect(screen.getByText("water")).toBeInTheDocument();
+    expect(screen.getByText("試薬 / 触媒 / 溶媒")).toBeInTheDocument(); expect(screen.getByText("工程 / 条件")).toBeInTheDocument(); expect(screen.getByText("一般メモ")).toBeInTheDocument(); expect(screen.getByText("Warning 理由")).toBeInTheDocument();
+    expect(screen.getByText("Validation mode")).toBeInTheDocument(); expect(screen.getByText("Validator version")).toBeInTheDocument(); expect(screen.getAllByText("結合変化")).toHaveLength(2); expect(screen.getByText("元素差分")).toBeInTheDocument(); expect(screen.getByText("Warnings")).toBeInTheDocument();
+    expect(screen.getByText("作成日時")).toBeInTheDocument(); expect(screen.getByText("更新日時")).toBeInTheDocument();
+  });
+
+  it("keeps saved opaque Editor structure data visible when a LIMITED record has no Reaction SMILES and preview loading fails", async () => {
+    const user = userEvent.setup(); const opaqueEditorData = "opaque-editor-payload-without-reaction-smiles"; const limitedReaction = { ...reaction, reaction_smiles: "", editor_structure_data: opaqueEditorData, validation_mode: "LIMITED" as const, validation: { ...validation, validation_mode: "LIMITED" as const } };
+    vi.mocked(fetch).mockResolvedValueOnce(await json({ items: [limitedReaction], total: 1 })); render(<App />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /Library/ })); await screen.findByText("テスト反応"); await user.click(screen.getByRole("button", { name: "詳細" }));
+    expect(screen.getByText("Editor構造データ")).toBeInTheDocument(); expect(screen.getByText(opaqueEditorData)).toBeInTheDocument(); expect(screen.getByText("Reaction SMILES")).toBeInTheDocument(); expect(screen.getByText("LIMITED")).toBeInTheDocument();
+    const image = screen.getByRole("img", { name: "テスト反応の構造式プレビュー" }); fireEvent.error(image);
+    expect(screen.getByRole("status")).toHaveTextContent(`構造式プレビューを読み込めませんでした。${opaqueEditorData}`); expect(screen.getAllByText("未記入").length).toBeGreaterThan(0);
+  });
+
+  it("opens a detail view from a card double click but never from an action button double click", async () => {
+    const user = userEvent.setup(); vi.mocked(fetch).mockResolvedValueOnce(await json({ items: [reaction], total: 1 })).mockResolvedValueOnce(await json({ items: [reaction], total: 1 })); render(<App />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /Library/ })); await screen.findByText("テスト反応");
+    fireEvent.doubleClick(screen.getByRole("button", { name: "再検証" })); expect(screen.getByRole("heading", { name: "反応ライブラリ" })).toBeInTheDocument();
+    fireEvent.doubleClick(screen.getByRole("heading", { name: "テスト反応" })); expect(screen.getByRole("heading", { name: "反応の詳細" })).toBeInTheDocument();
+  });
+
+  it("returns to Library or takes the stored reaction into Editor from its detail view", async () => {
+    const user = userEvent.setup(); vi.mocked(fetch).mockResolvedValueOnce(await json({ items: [reaction], total: 1 })); render(<App />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /Library/ })); await screen.findByText("テスト反応"); await user.click(screen.getByRole("button", { name: "詳細" }));
+    await user.click(screen.getAllByRole("button", { name: /Libraryへ戻る/ })[0]); expect(screen.getByRole("heading", { name: "反応ライブラリ" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "詳細" })); await user.click(screen.getAllByRole("button", { name: "編集する" })[0]);
+    expect(screen.getByRole("heading", { name: "反応を改訂する" })).toBeInTheDocument(); expect(screen.getByDisplayValue("テスト反応")).toBeInTheDocument();
+  });
+
   it("uses the backend SVG preview and only exposes text after image failure", async () => {
     const user = userEvent.setup(); vi.mocked(fetch).mockResolvedValueOnce(await json({ items: [reaction], total: 1 })); render(<App />);
     await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /Library/ })); const image = await screen.findByRole("img", { name: "テスト反応の構造式プレビュー" });
