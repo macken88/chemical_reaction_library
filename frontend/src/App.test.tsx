@@ -35,6 +35,13 @@ describe("reaction library workflow", () => {
     expect(screen.getByLabelText("3番目の係数")).toBeInTheDocument();
   });
 
+  it("keeps Validation out of the persistent sidebar", () => {
+    render(<App />);
+    const navigation = screen.getByRole("navigation", { name: "主な画面" });
+    expect(within(navigation).getAllByRole("button")).toHaveLength(3);
+    expect(within(navigation).queryByRole("button", { name: /Validation/ })).not.toBeInTheDocument();
+  });
+
   it("asks before discarding a dirty Draft from the brand entry point", async () => {
     const user = userEvent.setup(); const confirm = vi.fn().mockReturnValue(false); vi.stubGlobal("confirm", confirm); render(<App />);
     await user.type(screen.getByPlaceholderText("例: 酢酸エチルの加水分解"), "残すDraft"); await user.click(screen.getByRole("link", { name: /反応台帳/ }));
@@ -60,16 +67,63 @@ describe("reaction library workflow", () => {
     await user.click(within(screen.getByTestId("ketcher-反応")).getByRole("button", { name: "描画内容を取り込む" }));
     await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/reactions/parse", expect.objectContaining({ method: "POST" })));
     expect(screen.getByDisplayValue("残す名称")).toBeInTheDocument(); expect(screen.getByDisplayValue("CCO")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Validation へ進む/ }));
+    await user.click(screen.getByRole("button", { name: /検証して登録へ/ }));
     await screen.findByText("Atom mapping is incomplete");
     const validationRequest = vi.mocked(fetch).mock.calls[1][1] as RequestInit;
     expect(JSON.parse(validationRequest.body as string).components).toEqual(parsed.components);
   });
 
-  it("displays warnings and reloads the library after registration", async () => {
+  it("moves from Editor through the pre-registration check and permits Warning registration", async () => {
     const user = userEvent.setup(); const confirm = vi.fn().mockReturnValue(false); vi.stubGlobal("confirm", confirm); vi.mocked(fetch).mockResolvedValueOnce(await json(validation)).mockResolvedValueOnce(await json(reaction, 201)).mockResolvedValueOnce(await json({ items: [reaction], total: 1 })); render(<App />);
-    await user.click(screen.getByRole("button", { name: /Validation へ進む/ })); await screen.findByText("Atom mapping is incomplete"); await user.click(screen.getByRole("button", { name: "この内容で登録" }));
+    await user.click(screen.getByRole("button", { name: /検証して登録へ/ })); await screen.findByText("Atom mapping is incomplete");
+    expect(screen.getByText("全成分の構造と、元素・電荷の収支を確認します。", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("結合変化")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Warning を許容する理由（任意）"), "mappingは未入力のため");
+    await user.click(screen.getByRole("button", { name: "この内容で登録" }));
     expect(await screen.findByText("テスト反応")).toBeInTheDocument(); expect(vi.mocked(fetch).mock.calls.at(-1)?.[0]).toBe("/api/reactions"); await user.click(screen.getByRole("button", { name: /新規反応/ })); expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["FULL", "全成分の構造と、元素・電荷の収支を確認します。"],
+    ["REPEAT_UNIT", "繰返し単位と n を含む高分子表現を確認します。原子数を確定できない項目は評価対象外になります。"],
+    ["LOCAL", "反応部位など、指定された局所構造を中心に確認します。反応全体の収支は対象外の場合があります。"],
+    ["LIMITED", "入力から確認できる構造だけを確認します。元素・電荷の収支、Atom mapping、結合変化など、評価できない項目は「評価対象外」と表示します。"],
+  ])("shows mode-specific coverage for %s", async (validationMode, coverage) => {
+    const user = userEvent.setup(); vi.mocked(fetch).mockResolvedValueOnce(await json({ ...validation, validation_mode: validationMode })); render(<App />);
+    await user.click(screen.getByRole("button", { name: /検証して登録へ/ }));
+    expect(await screen.findByText(coverage)).toBeInTheDocument();
+  });
+
+  it("invalidates a loaded validation after an edit and requires revalidation before registration", async () => {
+    const user = userEvent.setup(); vi.mocked(fetch).mockResolvedValueOnce(await json({ items: [reaction], total: 1 })).mockResolvedValueOnce(await json(validation)).mockResolvedValueOnce(await json(reaction, 200)).mockResolvedValueOnce(await json({ items: [reaction], total: 1 })); render(<App />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /Library/ })); await screen.findByText("テスト反応"); await user.click(screen.getByRole("button", { name: "編集" }));
+    expect(screen.getByText("現在のDraftは検証済みです。登録前に結果を確認できます。")).toBeInTheDocument();
+    await user.type(screen.getByPlaceholderText("例: 酢酸エチルの加水分解"), " 改訂");
+    expect(screen.getByText("現在のDraftは未検証です。変更後は再検証が必要です。")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "この内容で登録" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /検証して登録へ/ })); await screen.findByText("Atom mapping is incomplete");
+    await user.click(screen.getByRole("button", { name: "この内容で登録" }));
+    expect(await screen.findByText("テスト反応")).toBeInTheDocument();
+    expect(vi.mocked(fetch).mock.calls[2][0]).toBe("/api/reactions/7");
+  });
+
+  it("normalizes a null saved Warning reason before showing the registration check", async () => {
+    const user = userEvent.setup(); const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined); vi.mocked(fetch).mockResolvedValueOnce(await json({ items: [{ ...reaction, warning_reason: null }] })).mockResolvedValueOnce(await json(validation)); render(<App />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /Library/ })); await screen.findByText("テスト反応"); await user.click(screen.getByRole("button", { name: "編集" }));
+    await user.click(screen.getByRole("button", { name: /検証して登録へ/ }));
+    expect(await screen.findByLabelText("Warning を許容する理由（任意）")).toHaveValue("");
+    expect(consoleError).not.toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  it("invalidates validation when a Ketcher import replaces the reaction structure", async () => {
+    const user = userEvent.setup(); vi.mocked(fetch).mockResolvedValueOnce(await json(validation)).mockResolvedValueOnce(await json({ draft: parsed })); render(<App />);
+    await user.click(screen.getByRole("button", { name: /検証して登録へ/ })); await screen.findByText("Atom mapping is incomplete");
+    await user.click(screen.getByRole("button", { name: "← 修正へ戻る" }));
+    expect(screen.getByText("現在のDraftは検証済みです。登録前に結果を確認できます。")).toBeInTheDocument();
+    await user.click(within(screen.getByTestId("ketcher-反応")).getByRole("button", { name: "描画内容を取り込む" }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/reactions/parse", expect.objectContaining({ method: "POST" })));
+    expect(screen.getByText("現在のDraftは未検証です。変更後は再検証が必要です。")).toBeInTheDocument();
   });
 
   it("sends independent full-text, reagent, and structural search fields as intentional AND conditions", async () => {
