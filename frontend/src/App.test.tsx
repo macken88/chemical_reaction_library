@@ -85,6 +85,18 @@ describe("reaction library workflow", () => {
     expect(vi.mocked(fetch)).toHaveBeenCalledWith("/api/reactions/import-json", expect.objectContaining({ method: "POST" }));
   });
 
+  it.each([404, 405])("reports a backend upgrade error when JSON Import is unavailable (%s)", async (status) => {
+    const user = userEvent.setup(); vi.mocked(fetch).mockResolvedValueOnce(await json({ detail: "Not Found" }, status)); render(<App />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /Import/ }));
+    await user.click(screen.getByRole("button", { name: "サンプルを挿入" }));
+    const source = screen.getByLabelText("JSON 原文") as HTMLTextAreaElement;
+    await user.click(screen.getByRole("button", { name: "Draftを作成してEditorで確認" }));
+    expect(await screen.findByText(/JSON一括Importに対応したバックエンドへ更新するため、アプリを再起動してください。/)).toBeInTheDocument();
+    expect(screen.queryByText(/JSON の契約エラー/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/JSON の構造エラー/)).not.toBeInTheDocument();
+    expect(source.value).toContain('"structure"');
+  });
+
   it("labels a parsed JSON structure failure separately from a contract failure", async () => {
     const user = userEvent.setup(); vi.mocked(fetch).mockResolvedValueOnce(await json({ detail: "structure is invalid: Reaction SMILES must contain reactants>agents>products" }, 422)); render(<App />);
     await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /Import/ }));

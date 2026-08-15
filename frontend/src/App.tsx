@@ -119,6 +119,10 @@ function Import({ onImported, report }: { onImported: (draft: ReactionDraft) => 
       }
       report("Draft を作成しました。Editor で構造とメモを確認してから Validation を実行してください。");
     } catch (error) {
+      if (mode === "json" && error instanceof ApiError && (error.status === 404 || error.status === 405)) {
+        report("JSON一括Importに対応したバックエンドへ更新するため、アプリを再起動してください。開発起動中なら停止してscripts/run-dev.ps1で再起動します。");
+        return;
+      }
       const jsonCategory = error instanceof ApiError && error.message.startsWith("structure is invalid:") ? "構造" : "契約";
       report(`${mode === "json" ? `JSON の${jsonCategory}` : "RXN の構造"}エラーです。原文は保持しています。${messageFor(error)}`);
     } finally { setBusy(false); }
