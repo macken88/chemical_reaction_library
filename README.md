@@ -34,7 +34,7 @@ FastAPI は `http://127.0.0.1:8000`、Vite は `http://127.0.0.1:5173` で待ち
 
 ## データとバックアップ
 
-既定のデータベースはルートの `reaction_library.sqlite3` です。環境変数 `REACTION_LIBRARY_DATABASE_URL` で SQLite の保存先を変更できます。バックアップはデータベースと同じディレクトリの `backups/` に作成されます。
+既定のデータベースは `data/reaction_library.sqlite3` です。環境変数 `REACTION_LIBRARY_DATABASE_URL` で SQLite の保存先を変更できます。バックアップは `data/backups/`（または指定したデータベースと同じディレクトリの `backups/`）に作成されます。
 
 バックアップは別の安全な場所にもコピーしてください。リストアは現在のデータベースを置き換える操作なので、実行前に新しいバックアップを取得し、対象ファイルとスキーマバージョンを確認してください。アプリは無効な SQLite や異なるスキーマのバックアップを拒否します。
 

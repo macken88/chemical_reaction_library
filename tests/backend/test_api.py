@@ -281,13 +281,13 @@ def test_known_legacy_v1_database_is_snapshotted_and_migrated(tmp_path: Path) ->
     assert (tmp_path / "source.sqlite3.legacy-v1-pre-migration.sqlite3").is_file()
 
 
-def test_default_root_path_migrates_known_legacy_v1_at_startup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_data_path_migrates_known_legacy_v1_at_startup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
-    assert Database().database_url == "sqlite:///reaction_library.sqlite3"
-    root_path = tmp_path / "reaction_library.sqlite3"
-    seeded = create_app(f"sqlite:///{root_path}")
+    assert Database().database_url == "sqlite:///data/reaction_library.sqlite3"
+    data_path = tmp_path / "data" / "reaction_library.sqlite3"
+    seeded = create_app(f"sqlite:///{data_path}")
     seeded.state.database.dispose()
-    connection = sqlite3.connect(root_path)
+    connection = sqlite3.connect(data_path)
     connection.execute("DELETE FROM schema_metadata WHERE key = 'schema_revision'")
     connection.execute("INSERT INTO schema_metadata (key, value) VALUES ('schema_version', '1')")
     connection.commit()
@@ -295,7 +295,7 @@ def test_default_root_path_migrates_known_legacy_v1_at_startup(tmp_path: Path, m
     app = create_app(initialize=False)
     with TestClient(app) as client:
         assert client.get("/api/schema-version").json()["schema_version"] == SCHEMA_REVISION
-    assert (tmp_path / "reaction_library.sqlite3.legacy-v1-pre-migration.sqlite3").is_file()
+    assert (tmp_path / "data" / "reaction_library.sqlite3.legacy-v1-pre-migration.sqlite3").is_file()
 
 
 def test_large_backup_upload_restore_round_trip(tmp_path: Path) -> None:

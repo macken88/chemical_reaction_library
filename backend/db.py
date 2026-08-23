@@ -269,7 +269,7 @@ class Database:
     """Serializes library access and owns safe file-backed SQLite replacement."""
 
     def __init__(self, database_url: str | None = None) -> None:
-        self.database_url = database_url or os.environ.get("REACTION_LIBRARY_DATABASE_URL", "sqlite:///reaction_library.sqlite3")
+        self.database_url = database_url or os.environ.get("REACTION_LIBRARY_DATABASE_URL", "sqlite:///data/reaction_library.sqlite3")
         self._condition = threading.Condition(threading.Lock())
         self._maintenance_active = False
         self._active_sessions = 0
