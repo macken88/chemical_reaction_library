@@ -79,7 +79,7 @@ describe("reaction library workflow", () => {
     const user = userEvent.setup(); vi.mocked(fetch).mockResolvedValueOnce(await json({ detail: "Extra inputs are not permitted" }, 422)); render(<App />);
     await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /Import/ }));
     await user.click(screen.getByRole("button", { name: "サンプルを挿入" }));
-    const source = screen.getByLabelText("JSON 原文") as HTMLTextAreaElement; expect(source.value).toContain('"schema_version": 1');
+    const source = screen.getByLabelText("JSON 原文") as HTMLTextAreaElement; expect(source.value).toContain('"schema_version": 1'); expect(source.value).toContain('"component_names"');
     await user.click(screen.getByRole("button", { name: "Draftを作成してEditorで確認" }));
     expect(await screen.findByText(/JSON の契約エラー/)).toBeInTheDocument(); expect(source.value).toContain('"structure"');
     expect(vi.mocked(fetch)).toHaveBeenCalledWith("/api/reactions/import-json", expect.objectContaining({ method: "POST" }));

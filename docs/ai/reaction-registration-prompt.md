@@ -26,6 +26,13 @@ Importに貼り付けるJSONだけを出力してください。Markdown、コ�
     "format": "reaction_smiles または rxn",
     "value": "構造の原文"
   },
+  "component_names": [
+    {
+      "role": "REACTANT または CONDITION または PRODUCT",
+      "occurrence_index": 0,
+      "display_name": "構造に対応する物質名"
+    }
+  ],
   "name": "反応名",
   "tags": ["タグ"],
   "reagents_text": "試薬・触媒・溶媒の記録",
@@ -41,10 +48,17 @@ Importに貼り付けるJSONだけを出力してください。Markdown、コ�
 - atom mapping は反応物と生成物で対応が正しい原子だけに付ける。確信がなければ付けない。
 - BigSMILESなど通常のSMILESとして解釈できない独自表記は出力しない。
 
+成分名の規則:
+- `component_names` は省略可能で、構造から導出された成分に名称だけを対応付ける配列である。
+- 各要素の `role` は `REACTANT`、`CONDITION`、`PRODUCT` のいずれかにする。
+- `occurrence_index` は同じ `role` の成分について、入力した構造の左から数えた0始まりの順番にする。canonical化や並べ替え後の順番ではない。
+- 同じ `role` と `occurrence_index` の組み合わせを重複させない。該当する成分がない組み合わせを出力しない。
+- 名称が不明な成分は `component_names` に含めず、空文字の `display_name` は出力しない。
+
 禁止する導出情報:
 - `components`、`reaction_smiles`（structure.value 以外）、`editor_structure_data`、
   `canonical_smiles`、`coefficient`、`validation`、ID、作成日時、更新日時を出力しない。
-- 成分台帳、canonical Reaction SMILES、検証値はサーバーが `structure` だけから導出する。
+- 成分台帳、canonical Reaction SMILES、検証値はサーバーが `structure` だけから導出する。`component_names` は成分構造を指定せず、導出済み成分へ名称だけを設定する。
 
 情報不足、構造が曖昧、または候補を一意に選べない場合は、JSONを推測して出力せず、
 追加で必要な情報を日本語で質問する。
@@ -59,6 +73,12 @@ Importに貼り付けるJSONだけを出力してください。Markdown、コ�
     "format": "reaction_smiles",
     "value": "CC(=O)O.CCO>>CC(=O)OCC.O"
   },
+  "component_names": [
+    {"role": "REACTANT", "occurrence_index": 0, "display_name": "酢酸"},
+    {"role": "REACTANT", "occurrence_index": 1, "display_name": "エタノール"},
+    {"role": "PRODUCT", "occurrence_index": 0, "display_name": "酢酸エチル"},
+    {"role": "PRODUCT", "occurrence_index": 1, "display_name": "水"}
+  ],
   "name": "酢酸エチルの合成",
   "tags": ["エステル化", "Fischer"],
   "reagents_text": "硫酸触媒",

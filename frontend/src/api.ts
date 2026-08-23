@@ -24,10 +24,17 @@ export interface ReactionDraft {
 
 export type ImportedStructureFormat = "reaction_smiles" | "rxn";
 
+export interface ImportedComponentName {
+  role: Role;
+  occurrence_index: number;
+  display_name: string;
+}
+
 /** Mirrors the strict, versioned Pydantic contract for /reactions/import-json. */
 export interface ReactionImportRequest {
   schema_version: 1;
   structure: { format: ImportedStructureFormat; value: string };
+  component_names?: ImportedComponentName[];
   name: string;
   tags: string[];
   reagents_text: string;

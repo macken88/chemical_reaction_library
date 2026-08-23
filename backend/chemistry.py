@@ -86,6 +86,21 @@ def parse_reaction_import(request: ReactionImportRequest) -> ParseResponse:
     derived by the existing parser rather than accepted from external JSON.
     """
     parsed = parse_reaction(request.structure.value, request.structure.format.value)
+    components_by_role: dict[ComponentRole, list[ComponentDraft]] = {
+        role: [component for component in parsed.draft.components if component.role is role]
+        for role in ComponentRole
+    }
+    for component_name in request.component_names:
+        matching_components = components_by_role[component_name.role]
+        if component_name.occurrence_index >= len(matching_components):
+            raise ValueError(
+                f"component_names entry for {component_name.role.value} occurrence_index "
+                f"{component_name.occurrence_index} is out of range; parsed structure has "
+                f"{len(matching_components)} {component_name.role.value} component(s)"
+            )
+        # The import contract never accepts components or structures directly.
+        # Names are assigned only after parsing the declared structure.
+        matching_components[component_name.occurrence_index].display_name = component_name.display_name
     draft_data = parsed.draft.model_dump()
     draft_data.update(
         name=request.name,

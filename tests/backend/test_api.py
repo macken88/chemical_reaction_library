@@ -95,6 +95,62 @@ def test_json_import_uses_only_declared_structure_and_rejects_invalid_contracts(
     assert schema["ImportedStructure"]["additionalProperties"] is False
 
 
+def test_json_import_applies_component_names_only_to_parsed_components(tmp_path: Path) -> None:
+    app = create_app(f"sqlite:///{tmp_path / 'library.sqlite3'}")
+    source = {
+        "schema_version": 1,
+        "structure": {"format": "reaction_smiles", "value": "CCO.O>O>CC=O.O"},
+        "name": "named ethanol oxidation",
+        "tags": ["oxidation"],
+        "reagents_text": "Cu",
+        "process_text": "ambient",
+        "notes": "Imported as a draft",
+        "component_names": [
+            {"role": "REACTANT", "occurrence_index": 0, "display_name": "ethanol"},
+            {"role": "REACTANT", "occurrence_index": 1, "display_name": "water"},
+            {"role": "CONDITION", "occurrence_index": 0, "display_name": "oxidant"},
+            {"role": "PRODUCT", "occurrence_index": 0, "display_name": "acetaldehyde"},
+            {"role": "PRODUCT", "occurrence_index": 1, "display_name": "water"},
+        ],
+    }
+    with TestClient(app) as client:
+        imported = client.post("/api/reactions/import-json", json=source)
+        assert imported.status_code == 200, imported.text
+        components = imported.json()["draft"]["components"]
+        assert [(component["role"], component["display_name"]) for component in components] == [
+            ("REACTANT", "ethanol"),
+            ("REACTANT", "water"),
+            ("CONDITION", "oxidant"),
+            ("PRODUCT", "acetaldehyde"),
+            ("PRODUCT", "water"),
+        ]
+
+        duplicate = client.post("/api/reactions/import-json", json={
+            **source,
+            "component_names": [
+                {"role": "REACTANT", "occurrence_index": 0, "display_name": "ethanol"},
+                {"role": "REACTANT", "occurrence_index": 0, "display_name": "duplicate"},
+            ],
+        })
+        assert duplicate.status_code == 422
+
+        out_of_range = client.post("/api/reactions/import-json", json={
+            **source,
+            "component_names": [{"role": "PRODUCT", "occurrence_index": 2, "display_name": "missing"}],
+        })
+        assert out_of_range.status_code == 422
+        assert "out of range" in out_of_range.json()["detail"]
+
+        derived_component_rejected = client.post("/api/reactions/import-json", json={
+            **source,
+            "components": [{"role": "REACTANT", "structure": "CCO", "display_name": "forged"}],
+        })
+        assert derived_component_rejected.status_code == 422
+
+    schema = app.openapi()["components"]["schemas"]
+    assert schema["ImportedComponentName"]["additionalProperties"] is False
+
+
 def test_backup_restore_requires_confirmation_and_restores_whole_database(tmp_path: Path) -> None:
     app = create_app(f"sqlite:///{tmp_path / 'library.sqlite3'}")
     with TestClient(app) as client:

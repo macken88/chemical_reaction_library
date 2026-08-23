@@ -97,6 +97,12 @@ function Editor({ draft, validation, update, onValidate, onCopy, onAiCopy, onKet
 const JSON_IMPORT_SAMPLE: ReactionImportRequest = {
   schema_version: 1,
   structure: { format: "reaction_smiles", value: "CC(=O)O.CCO>>CC(=O)OCC.O" },
+  component_names: [
+    { role: "REACTANT", occurrence_index: 0, display_name: "酢酸" },
+    { role: "REACTANT", occurrence_index: 1, display_name: "エタノール" },
+    { role: "PRODUCT", occurrence_index: 0, display_name: "酢酸エチル" },
+    { role: "PRODUCT", occurrence_index: 1, display_name: "水" },
+  ],
   name: "酢酸エチルの合成",
   tags: ["エステル化", "例"],
   reagents_text: "硫酸触媒",

@@ -5,7 +5,7 @@ from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, field_validator, model_validator
 
 
 class ComponentRole(StrEnum):
@@ -43,6 +43,16 @@ class ImportedStructure(BaseModel):
     value: StrictStr = Field(min_length=1, max_length=1_000_000)
 
 
+class ImportedComponentName(BaseModel):
+    """A display-name mapping for a component derived from imported structure."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    role: ComponentRole
+    occurrence_index: StrictInt = Field(ge=0)
+    display_name: StrictStr = Field(min_length=1, max_length=300)
+
+
 class ReactionImportRequest(BaseModel):
     """Versioned, strict JSON import contract; derived fields are intentionally absent."""
 
@@ -55,6 +65,7 @@ class ReactionImportRequest(BaseModel):
     reagents_text: StrictStr = Field(max_length=50_000)
     process_text: StrictStr = Field(max_length=50_000)
     notes: StrictStr = Field(max_length=50_000)
+    component_names: list[ImportedComponentName] = Field(default_factory=list, max_length=10_000)
 
     @field_validator("tags")
     @classmethod
@@ -63,6 +74,17 @@ class ReactionImportRequest(BaseModel):
             if not tag.strip() or len(tag.strip()) > 100:
                 raise ValueError("tag must contain 1-100 characters")
         return tags
+
+    @field_validator("component_names")
+    @classmethod
+    def validate_component_name_mappings(cls, component_names: list[ImportedComponentName]) -> list[ImportedComponentName]:
+        seen: set[tuple[ComponentRole, int]] = set()
+        for component_name in component_names:
+            key = (component_name.role, component_name.occurrence_index)
+            if key in seen:
+                raise ValueError("component_names must not map the same role and occurrence_index more than once")
+            seen.add(key)
+        return component_names
 
 
 class ComponentDraft(BaseModel):

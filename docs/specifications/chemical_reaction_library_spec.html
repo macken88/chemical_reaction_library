@@ -348,7 +348,7 @@ ValidationロジックはFastAPIやGUIに埋め込まず、単体テスト可能
                     └─ 原文を保持して修正可能</div>
 
 <h3>6.3 Importの責務</h3>
-<p>Importは「登録機能」ではなく、外部表現をアプリ内部のReaction Draftへ変換する入力機能とする。Import直後の自動登録は禁止する。</p>
+<p>Importは「登録機能」ではなく、外部表現をアプリ内部のReaction Draftへ変換する入力機能とする。Import直後の自動登録は禁止する。JSON Importでは、構造から導出した成分の役割ごとの出現順に対応付ける名称だけを任意で受け取り、成分構造・係数・検証値などの導出情報は受け取らない。</p>
 </section>
 
 <section class="section" id="validation">
